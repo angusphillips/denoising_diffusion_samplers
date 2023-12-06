@@ -1,10 +1,11 @@
-jax[cuda]
+--find-links https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+jax[cuda11_cudnn86]==0.4.8
 # git+https://github.com/deepmind/jaxline
 optax
 distrax
 dm-haiku
 chex
-numpyro[cuda]
+numpyro==0.10.1
 tfp-nightly
 inference_gym
 ml-collections
