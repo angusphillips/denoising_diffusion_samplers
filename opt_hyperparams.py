@@ -3,7 +3,7 @@
 
 opt_funnel = {
     'funnel': {
-        '32': {
+        '32': { # 32 actually refers to tf=3.2, not number of steps
             'oudstl': {
                 'sigma': 1.075,
                 'alpha': 1.075,

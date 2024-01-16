@@ -2,6 +2,7 @@
 
 from collections.abc import MutableMapping
 
+
 # Taken from https://stackoverflow.com/questions/6027558/flatten-nested-dictionaries-compressing-keys
 def flatten_nested_dict(nested_dict, parent_key="", sep="."):
     items = []
