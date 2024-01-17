@@ -192,6 +192,7 @@ def set_task(
         config.model.target = log_prob_funn
 
         config.trainer.learning_rate = 5 * 10 ** (-3)
+        config.trainer.lr_sch_base_dec = 0.95
     elif task == "mixture_well":
         config.model.input_dim = 2
         config.model.sigma = 1.15

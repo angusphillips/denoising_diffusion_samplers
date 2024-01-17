@@ -8,6 +8,7 @@ from dds.train_dds import train_dds
 @hydra.main(config_path="config", config_name="main")
 def main(hydra_config):
     base_config = get_config()
+    base_config.model.tfinal = hydra_config.tf
     base_config.model.dt = hydra_config.tf / hydra_config.num_steps
     task_config = set_task(base_config, task=hydra_config.experiment)
     task_config.trainer.epochs = hydra_config.training_iters

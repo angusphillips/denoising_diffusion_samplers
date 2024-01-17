@@ -426,12 +426,14 @@ def train_dds(config: configdict.ConfigDict):
             #     logging.info(log_string)
             if progress_bar:
                 progress_bar.set_description(f"loss: {loss:.3f}")
-            if config.trainer.notebook and print_flag:
-                print(log_string)
+            # if config.trainer.notebook and print_flag:
+            #     print(log_string)
 
             loss_list.append(loss)
             if wandb_run:
-                wandb_run.log({f"{wandb_key}/epoch": epoch, f"{wandb_key}/loss": loss})
+                wandb_run.log(
+                    {f"{wandb_key}/epoch": epoch, f"{wandb_key}/loss": loss}, step=epoch
+                )
             # writer.flush()
 
         loss_list = []
