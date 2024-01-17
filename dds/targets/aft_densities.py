@@ -7,8 +7,6 @@ from typing import Any, Optional
 import chex
 import haiku as hk
 
-import inference_gym.using_jax as gym
-
 
 import jax
 import jax.numpy as jnp
@@ -173,47 +171,47 @@ class LogReg(LogDensity):
         return self.target(x)
 
 
-class BrownianMissingMiddleScales(LogDensity):
-    """This class implements the BrownianMissingMiddle from inf gym.
+# class BrownianMissingMiddleScales(LogDensity):
+#     """This class implements the BrownianMissingMiddle from inf gym.
 
-    We wrap it for compatibility purposes.
-    """
+#     We wrap it for compatibility purposes.
+#     """
 
-    def __init__(self, config: ConfigDict, num_dim: int = 32):
-        super().__init__(config, num_dim)
-        self.cls = gym.targets.BrownianMotionUnknownScalesMissingMiddleObservations
-        self.gym_target = gym.targets.VectorModel(
-            self.cls(), flatten_sample_transformations=True
-        )
+#     def __init__(self, config: ConfigDict, num_dim: int = 32):
+#         super().__init__(config, num_dim)
+#         self.cls = gym.targets.BrownianMotionUnknownScalesMissingMiddleObservations
+#         self.gym_target = gym.targets.VectorModel(
+#             self.cls(), flatten_sample_transformations=True
+#         )
 
-    def _check_constructor_inputs(self, config: ConfigDict, num_dim: int):
-        pass
+#     def _check_constructor_inputs(self, config: ConfigDict, num_dim: int):
+#         pass
 
-    def _posterior_log_density(self, x: Array) -> Array:
-        y = self.gym_target.default_event_space_bijector(x)
+#     def _posterior_log_density(self, x: Array) -> Array:
+#         y = self.gym_target.default_event_space_bijector(x)
 
-        lnp = self.gym_target.unnormalized_log_prob(y)
-        jac = self.gym_target.default_event_space_bijector.forward_log_det_jacobian(
-            x, event_ndims=1
-        )
-        return lnp + jac
+#         lnp = self.gym_target.unnormalized_log_prob(y)
+#         jac = self.gym_target.default_event_space_bijector.forward_log_det_jacobian(
+#             x, event_ndims=1
+#         )
+#         return lnp + jac
 
-    def evaluate_log_density(self, x: Array) -> Array:
-        if len(x.shape) == 1:
-            return self._posterior_log_density(x)
-        else:
-            return jax.vmap(self._posterior_log_density)(x)
+#     def evaluate_log_density(self, x: Array) -> Array:
+#         if len(x.shape) == 1:
+#             return self._posterior_log_density(x)
+#         else:
+#             return jax.vmap(self._posterior_log_density)(x)
 
 
-class LorenzBridge(BrownianMissingMiddleScales):
-    """This class implements the Lorentz time series model from inf gym.
+# class LorenzBridge(BrownianMissingMiddleScales):
+#     """This class implements the Lorentz time series model from inf gym.
 
-    We wrap it for compatibility purposes.
-    """
+#     We wrap it for compatibility purposes.
+#     """
 
-    def __init__(self, config: ConfigDict, num_dim: int = 90):
-        super().__init__(config, num_dim)
-        self.cls = gym.targets.ConvectionLorenzBridge
-        self.gym_target = gym.targets.VectorModel(
-            self.cls(), flatten_sample_transformations=True
-        )
+#     def __init__(self, config: ConfigDict, num_dim: int = 90):
+#         super().__init__(config, num_dim)
+#         self.cls = gym.targets.ConvectionLorenzBridge
+#         self.gym_target = gym.targets.VectorModel(
+#             self.cls(), flatten_sample_transformations=True
+#         )

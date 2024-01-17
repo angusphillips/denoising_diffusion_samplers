@@ -1,0 +1,20 @@
+# @package _global_
+
+defaults:
+  - _self_
+  - server: local
+
+run_name: ${hydra:job.override_dirname}
+experiment: 'difficult_gaussian'
+group: ${experiment}
+seed: 0
+
+tf: 6.4
+num_steps: 128
+sigma: 1.075
+alpha: 0.6875
+
+training_iters: 10000
+lr: 5e-3
+
+log_every_n_epochs: 100

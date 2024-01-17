@@ -20,11 +20,15 @@ import numpy as onp
 import optax
 
 from jaxline import utils
+import tqdm
 
 from dds.configs.config import set_task
 from dds.data_paths import results_path
+from dds.targets.distributions import WhitenedDistributionWrapper
 from dds.utils import flatten_nested_dict
 import wandb
+
+from dds.vi import get_variational_approx
 
 
 FLAGS = flags.FLAGS
@@ -86,11 +90,23 @@ def train_dds(config: configdict.ConfigDict):
     wandb_kwargs = {
         "project": config.wandb.project,
         "entity": config.wandb.entity,
+        "group": config.wandb.group,
+        "name": config.wandb.name,
         "config": flatten_nested_dict(config.to_dict()),
         "mode": "online" if config.wandb.log else "disabled",
         "settings": wandb.Settings(code_dir=config.wandb.code_dir),
     }
     with wandb.init(**wandb_kwargs) as run:
+        # if config.use_vi_approx:
+        #     logging.info("Learning VI approximation")
+        #     key, key_ = jax.random.split(key)
+        #     vi_params = get_variational_approx(cfg, key_, target_distribution)
+        #     target_distribution = WhitenedDistributionWrapper(
+        #         target_distribution,
+        #         vi_params["Variational"]["means"],
+        #         vi_params["Variational"]["scales"],
+        #     )
+
         # train setup
         data_dim = config.model.input_dim
         device_no = jax.device_count()
@@ -390,6 +406,7 @@ def train_dds(config: configdict.ConfigDict):
             exact: bool = False,
             wandb_run=None,
             wandb_key: Optional[str] = None,
+            progress_bar: Optional[Any] = None,
         ) -> None:
             loss, model_state = jited_val_loss(
                 trainable_params,
@@ -404,8 +421,11 @@ def train_dds(config: configdict.ConfigDict):
             loss = jax.device_get(loss)
             loss = onp.asarray(utils.get_first(loss).item()).item()
 
-            log_string = "epoch: %s %s  loss: %s", epoch, "TRAIN", loss
-            logging.info(log_string)
+            log_string = f"epoch: {epoch}, loss: {loss}"
+            # if print_flag:
+            #     logging.info(log_string)
+            if progress_bar:
+                progress_bar.set_description(f"loss: {loss:.3f}")
             if config.trainer.notebook and print_flag:
                 print(log_string)
 
@@ -420,7 +440,8 @@ def train_dds(config: configdict.ConfigDict):
 
         start = 0
         times = []
-        for epoch in range(start, config.trainer.epochs):
+        progress_bar = tqdm.tqdm(list(range(start, config.trainer.epochs)))
+        for epoch in progress_bar:
             rng_key = next(seq)
             subkeys = jax.random.split(rng_key, device_no)
 
@@ -465,6 +486,7 @@ def train_dds(config: configdict.ConfigDict):
                     print_flag=True,
                     wandb_run=run,
                     wandb_key="elbo_results",
+                    progress_bar=progress_bar,
                 )
 
                 eval_report(
