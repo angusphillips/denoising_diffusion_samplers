@@ -141,8 +141,8 @@ def sdeint_ito_em_scan_ou(
             # beta_k = np.sqrt(1.0 - alpha_k**2) but the scale is harder to compare to
             # PIS and grid search so we are sticking to this notation/setup which is
             # more inline with DDPM and SDE score matching
-            beta_k = np.clip(alpha * np.sqrt(delta_t), 0, 1)
-            alpha_k = np.sqrt(1.0 - beta_k**2)
+            beta_k = np.clip(alpha * np.sqrt(delta_t), 0, 1) # read sqrt alpha_k in paper
+            alpha_k = np.sqrt(1.0 - beta_k**2) # read sqrt(1-alpha_k) in paper
         else:  # more formal OU closed form transition looking parametrisation
             alpha_k = np.clip(np.exp(-alpha * delta_t), 0, 0.99999)
             beta_k = np.sqrt(1.0 - alpha_k**2)
