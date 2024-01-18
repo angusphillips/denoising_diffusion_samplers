@@ -78,11 +78,25 @@ class AugmentedBrownianFollmerSDESTL(hk.Module):
             0, self.tfinal, self.dt, dtype=self.dtype, **dict()
         )
 
-    def __call__(self, batch_size, is_training=True, dt=None, ode=False, exact=False):
+    def __call__(
+        self,
+        batch_size,
+        density_state,
+        is_training=True,
+        dt=None,
+        ode=False,
+        exact=False,
+    ):
         key = hk.next_rng_key()
         dt = self.dt if dt is None or is_training else dt
         return self.sample_aug_trajectory(
-            batch_size, key, dt=dt, is_training=is_training, ode=ode, exact=exact
+            batch_size,
+            key,
+            density_state=density_state,
+            dt=dt,
+            is_training=is_training,
+            ode=ode,
+            exact=exact,
         )
 
     def init_sample(self, n, key):
@@ -162,7 +176,9 @@ class AugmentedBrownianFollmerSDESTL(hk.Module):
 
         return out
 
-    def sample_aug_trajectory(self, batch_size, key, dt=0.05, rng=None, **_):
+    def sample_aug_trajectory(
+        self, batch_size, key, density_state, dt=0.05, rng=None, **_
+    ):
         y0 = self.init_sample(batch_size, key)
 
         zeros = np.zeros((batch_size, 1))
@@ -211,7 +227,7 @@ class AugmentedBrownianFollmerSDESTL(hk.Module):
             dtype=self.dtype,
         )
 
-        return param_trajectory, ts
+        return param_trajectory, ts, density_state
 
 
 class AugmentedOUFollmerSDESTL(AugmentedBrownianFollmerSDESTL):
@@ -379,7 +395,7 @@ class AugmentedOUDFollmerSDESTL(AugmentedBrownianFollmerSDESTL):
     def init_sample(self, n, key):
         return jax.random.normal(key, (n, self.dim)) * self.sigma
 
-    def f_aug(self, y, t, args):
+    def f_aug(self, y, t, density_state, args):
         """See base class."""
         t_ = t * np.ones((y.shape[0], 1))
 
@@ -389,13 +405,19 @@ class AugmentedOUDFollmerSDESTL(AugmentedBrownianFollmerSDESTL):
         detach = True if args and "detach" in args else False
 
         #     u_t = self.drift_network(y_no_aug, t_, self.target, ode=ode)
-        u_t = (
-            self.detached_drift(y_no_aug, t_, self.target, ode=ode)
+        u_t, density_state = (
+            self.detached_drift(
+                y_no_aug, t_, self.target, density_state=density_state, ode=ode
+            )
             if detach
-            else self.drift_network(y_no_aug, t_, self.target, ode=ode)
+            else self.drift_network(
+                y_no_aug, t_, self.target, density_state=density_state, ode=ode
+            )
         )
 
-        gamma_t_sq = self.g_aug(y, t, args)[..., : self.dim] ** 2
+        gamma_t, density_state = self.g_aug(y, t, density_state, args)
+
+        gamma_t_sq = gamma_t[..., : self.dim] ** 2
 
         u_t_normsq = ((u_t) ** 2 / gamma_t_sq).sum(axis=-1)[..., None] / 2.0
 
@@ -403,9 +425,9 @@ class AugmentedOUDFollmerSDESTL(AugmentedBrownianFollmerSDESTL):
         zeros = np.zeros((n, 1))
 
         state = np.concatenate((u_t, zeros, u_t_normsq), axis=-1)
-        return state
+        return state, density_state
 
-    def g_aug(self, y, t, args):
+    def g_aug(self, y, t, density_state, args):
         """See base class."""
         t_ = t * np.ones((y.shape[0], 1))
         y_no_aug = y[..., : self.dim]
@@ -418,18 +440,30 @@ class AugmentedOUDFollmerSDESTL(AugmentedBrownianFollmerSDESTL):
 
         detach = True if args and "detach" in args else False
         if self.detach_drift_stoch or detach:
-            u_t = self.detached_drift(y_no_aug, t_, self.target)
+            u_t, density_state = self.detached_drift(
+                y_no_aug, t_, self.target, density_state=density_state
+            )
         else:
-            u_t = self.drift_network(y_no_aug, t_, self.target)
+            u_t, density_state = self.drift_network(
+                y_no_aug, t_, self.target, density_state=density_state
+            )
 
         delta_t = (u_t) / gamma_t
 
         out = np.concatenate((gamma_t, delta_t, zeros), axis=-1)
 
-        return out
+        return out, density_state
 
     def sample_aug_trajectory(
-        self, batch_size, key, dt=0.05, rng=None, ode=False, exact=False, **_
+        self,
+        batch_size,
+        key,
+        density_state,
+        dt=0.05,
+        rng=None,
+        ode=False,
+        exact=False,
+        **_
     ):
         y0 = self.init_sample(batch_size, key)
 
@@ -449,13 +483,14 @@ class AugmentedOUDFollmerSDESTL(AugmentedBrownianFollmerSDESTL):
             partial(odeint_em_scan_ou, exact=exact) if ode else sdeint_ito_em_scan_ou
         )
 
-        param_trajectory, ts = integrator(
+        param_trajectory, ts, density_state = integrator(
             self.dim,
             self.alpha,
             self.f_aug,
             self.g_aug,
             y0_aug,
             key,
+            density_state=density_state,
             dt=dt,
             end=self.tfinal,
             step_scheme=self.step_scheme,
@@ -463,7 +498,7 @@ class AugmentedOUDFollmerSDESTL(AugmentedBrownianFollmerSDESTL):
             dtype=self.dtype,
         )
 
-        return param_trajectory, ts
+        return param_trajectory, ts, density_state
 
 
 class AugmentedControlledAIS(hk.Module):

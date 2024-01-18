@@ -9,6 +9,8 @@ experiment: 'difficult_gaussian'
 group: ${experiment}
 seed: 0
 
+use_vi_approx: False
+
 tf: 6.4
 num_steps: 128
 sigma: 1.075

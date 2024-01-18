@@ -10,6 +10,7 @@ import os
 from jax import numpy as np
 
 from ml_collections import config_dict as configdict
+import optax
 
 # from dds.configs import brownian_config
 # from dds.configs import lgcp_config
@@ -46,6 +47,7 @@ from dds.stl_samplers import AugmentedControlledAIS
 from dds.stl_samplers import ULAAIS
 
 from dds.targets import toy_targets
+from dds.targets.distributions import FunnelDistribution
 
 from dds.udp_samplers import AugmentedOUDFollmerSDEUDP
 
@@ -60,6 +62,7 @@ def get_config() -> configdict.ConfigDict:
     config.model = configdict.ConfigDict()
     config.dataset = configdict.ConfigDict()
     config.trainer = configdict.ConfigDict()
+    config.vi_approx = configdict.ConfigDict()
 
     config.model.fully_connected_units = [64, 64]
     # config.model.fully_connected_units = [512, 512, 512]
@@ -139,10 +142,16 @@ def get_config() -> configdict.ConfigDict:
 
     config.model.exp_dds = False  # ANGUS says whether to use DDPM parametrisation
 
-    config.trainer.random_seed = 42
+    config.trainer.random_seed = 0
+
+    config.vi_approx.iters = 20_000
+    config.vi_approx.batch_size = 512
+    config.vi_approx.schedule = optax.constant_schedule(1e-3)
 
     config.eval = configdict.ConfigDict()
     config.eval.seeds = 100
+
+    config.seed = 0
 
     config.wandb = configdict.ConfigDict()
     config.wandb.project = "dds"
@@ -183,16 +192,19 @@ def set_task(
     #     config.model.learn_betas = True
     # elif task == "brownian":
     #     config = brownian_config.make_config(config)
+
     if task == "funnel":
         config.model.input_dim = 10
-        log_prob_funn, _ = toy_targets.funnel(d=config.model.input_dim)
-
+        target_distribution = FunnelDistribution(
+            dim=config.model.input_dim, is_target=True
+        )
+        # log_prob_funn, _ = toy_targets.funnel(d=config.model.input_dim)
+        config.target_distribution = target_distribution
         config.model.elbo_batch_size = 2000
-        config.trainer.lnpi = log_prob_funn
-        config.model.target = log_prob_funn
-
+        config.vi_approx.iters = 50_000
         config.trainer.learning_rate = 5 * 10 ** (-3)
         config.trainer.lr_sch_base_dec = 0.95
+
     elif task == "mixture_well":
         config.model.input_dim = 2
         config.model.sigma = 1.15

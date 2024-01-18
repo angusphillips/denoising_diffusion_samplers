@@ -24,11 +24,18 @@ import tqdm
 
 from dds.configs.config import set_task
 from dds.data_paths import results_path
-from dds.targets.distributions import WhitenedDistributionWrapper
+from dds.targets.distributions import (
+    NormalDistributionWrapper,
+    WhitenedDistributionWrapper,
+)
 from dds.utils import flatten_nested_dict
 import wandb
 
 from dds.vi import get_variational_approx
+
+import warnings
+
+warnings.filterwarnings("ignore")
 
 
 FLAGS = flags.FLAGS
@@ -97,15 +104,25 @@ def train_dds(config: configdict.ConfigDict):
         "settings": wandb.Settings(code_dir=config.wandb.code_dir),
     }
     with wandb.init(**wandb_kwargs) as run:
-        # if config.use_vi_approx:
-        #     logging.info("Learning VI approximation")
-        #     key, key_ = jax.random.split(key)
-        #     vi_params = get_variational_approx(cfg, key_, target_distribution)
-        #     target_distribution = WhitenedDistributionWrapper(
-        #         target_distribution,
-        #         vi_params["Variational"]["means"],
-        #         vi_params["Variational"]["scales"],
-        #     )
+        key = jax.random.PRNGKey(config.seed)
+        if config.use_vi_approx:
+            logging.info("Learning VI approximation")
+            key, key_ = jax.random.split(key)
+            vi_params = get_variational_approx(
+                dim=config.model.input_dim,
+                lr_schedule=config.vi_approx.schedule,
+                batch_size=config.vi_approx.batch_size,
+                iters=config.vi_approx.iters,
+                rng=key_,
+                target_distribution=config.target_distribution,
+            )
+            target_distribution = WhitenedDistributionWrapper(
+                config.target_distribution,
+                vi_params["Variational"]["means"],
+                vi_params["Variational"]["scales"],
+            )
+        else:
+            target_distribution = config.target_distribution
 
         # train setup
         data_dim = config.model.input_dim
@@ -116,11 +133,19 @@ def train_dds(config: configdict.ConfigDict):
         m = config.model.m
 
         # post setup model vars
-        config.model.source_obj = distrax.MultivariateNormalDiag(
-            jnp.zeros(config.model.input_dim),
-            config.model.sigma * jnp.ones(config.model.input_dim),
+        # config.model.source_obj = distrax.MultivariateNormalDiag(
+        #     jnp.zeros(config.model.input_dim),
+        #     config.model.sigma * jnp.ones(config.model.input_dim),
+        # )
+        config.model.source_obj = NormalDistributionWrapper(
+            mean=0.0,
+            scale=config.model.sigma,
+            dim=config.model.input_dim,
+            is_target=False,
         )
-        config.model.source = config.model.source_obj.log_prob
+        config.model.source = lambda x: config.model.source_obj.evaluate_log_density(
+            x, 0
+        )[0]
 
         batch_size_ = int(config.model.batch_size / device_no)
         batch_size_elbo = int(config.model.elbo_batch_size / device_no)
@@ -148,10 +173,10 @@ def train_dds(config: configdict.ConfigDict):
             config.model.detach_path,
         )
 
-        target = config.model.target
+        target = target_distribution.evaluate_log_density
 
         tfinal = config.model.tfinal
-        lnpi = config.trainer.lnpi
+        lnpi = target_distribution.evaluate_log_density
 
         ref_proc_key = config.model.reference_process_key
         ref_proc = config.model.reference_process_dict[ref_proc_key]
@@ -194,7 +219,12 @@ def train_dds(config: configdict.ConfigDict):
         data_id = "denoising_diffusion_samplers"  # Project name
 
         def _forward_fn(
-            batch_size: int, training: bool = True, ode=False, exact=False, dt_=dt
+            batch_size: int,
+            density_state: int,
+            training: bool = True,
+            ode=False,
+            exact=False,
+            dt_=dt,
         ) -> jnp.ndarray:
             model_def = ref_proc(
                 sigma,
@@ -216,7 +246,7 @@ def train_dds(config: configdict.ConfigDict):
                 exact=exact,
             )
 
-            return model_def(batch_size, training, ode=ode)
+            return model_def(batch_size, density_state, training, ode=ode)
 
         forward_fn = hk.transform_with_state(_forward_fn)
 
@@ -227,7 +257,9 @@ def train_dds(config: configdict.ConfigDict):
         subkeys = utils.bcast_local_devices(rng_key)
 
         p_init = jax.pmap(
-            functools.partial(forward_fn.init, batch_size=batch_size_, training=True),
+            functools.partial(
+                forward_fn.init, batch_size=batch_size_, density_state=0, training=True
+            ),
             axis_name="num_devices",
         )
 
@@ -255,49 +287,55 @@ def train_dds(config: configdict.ConfigDict):
         opt_state = jax.pmap(opt.init)(trainable_params)
 
         @functools.partial(
-            jax.pmap, axis_name="num_devices", static_broadcasted_argnums=(3, 4, 5, 6)
+            jax.pmap,
+            axis_name="num_devices",
+            static_broadcasted_argnums=(3, 5, 6, 7),
         )
         def forward_fn_jit(
             params,
             model_state: hk.State,
             subkeys: jnp.ndarray,
             batch_size: jnp.ndarray,
+            density_state: int,
             ode=False,
             exact=False,
             dt_=dt,
         ):
-            samps, _ = forward_fn.apply(
+            samps, _, density_state = forward_fn.apply(
                 params,
                 model_state,
                 subkeys,
                 int(batch_size / device_no),
-                False,
+                density_state=density_state,
+                is_training=False,
                 ode=ode,
                 exact=exact,
                 dt_=dt_,
             )
             samps = jax.device_get(samps)
+            density_state = jax.device_get(density_state)
 
             augmented_trajectory, ts = samps
-            return (augmented_trajectory, ts), _
+            return (augmented_trajectory, ts), _, density_state
 
         def forward_fn_wrap(
             params,
             model_state: hk.State,
             rng_key: jnp.ndarray,
             batch_size: jnp.ndarray,
+            density_state: int,
             ode=False,
             exact=False,
             dt_=dt,
         ):
             subkeys = jax.random.split(rng_key, device_no)
-            (augmented_trajectory, ts), _ = forward_fn_jit(
-                params, model_state, subkeys, batch_size, ode, exact, dt_
+            (augmented_trajectory, ts), _, density_state = forward_fn_jit(
+                params, model_state, subkeys, batch_size, density_state, ode, exact, dt_
             )
 
             dv, ns, t, _ = augmented_trajectory.shape
             augmented_trajectory = augmented_trajectory.reshape(dv * ns, t, -1)
-            return (augmented_trajectory, utils.get_first(ts)), _
+            return (augmented_trajectory, utils.get_first(ts)), _, density_state
 
         def full_objective(
             trainable_params,
@@ -305,41 +343,57 @@ def train_dds(config: configdict.ConfigDict):
             model_state: hk.State,
             rng_key: jnp.ndarray,
             batch_size: int,
+            density_state: int,
             is_training: bool = True,
             ode: bool = False,
             stl: bool = False,
             exact: bool = False,
         ):
             params = hk.data_structures.merge(trainable_params, non_trainable_params)
-            (augmented_trajectory, _), model_state = forward_fn.apply(
-                params, model_state, rng_key, batch_size, True, ode, exact
+            (augmented_trajectory, _, density_state), model_state = forward_fn.apply(
+                params,
+                model_state,
+                rng_key,
+                batch_size,
+                density_state,
+                True,
+                ode,
+                exact,
             )
 
             # import pdb; pdb.set_trace()
             gpartial = functools.partial(
                 config.model.terminal_cost,
                 lnpi=lnpi,
-                sigma=sigma,
+                source=config.model.source,
                 tfinal=tfinal,
                 brown=brown,
             )
 
             if is_training:
-                loss = config.trainer.objective(
-                    augmented_trajectory, gpartial, stl=stl, trim=trim, dim=data_dim
+                loss, density_state = config.trainer.objective(
+                    augmented_trajectory,
+                    gpartial,
+                    density_state,
+                    stl=stl,
+                    trim=trim,
+                    dim=data_dim,
                 )
             elif not ode:
-                loss = config.trainer.lnz_is_estimator(
-                    augmented_trajectory, gpartial, dim=data_dim
+                loss, density_state = config.trainer.lnz_is_estimator(
+                    augmented_trajectory, gpartial, density_state, dim=data_dim
                 )
             else:
-                loss = config.trainer.lnz_pf_estimator(
-                    augmented_trajectory, config.model.source, config.model.target
+                loss, density_state = config.trainer.lnz_pf_estimator(
+                    augmented_trajectory,
+                    config.model.source,
+                    config.model.target,
+                    density_state=density_state,
                 )
-            return loss, model_state
+            return loss, (model_state, density_state)
 
         @functools.partial(
-            jax.pmap, axis_name="num_devices", static_broadcasted_argnums=(5,)
+            jax.pmap, axis_name="num_devices", static_broadcasted_argnums=(5)
         )
         def update(
             trainable_params,
@@ -348,13 +402,17 @@ def train_dds(config: configdict.ConfigDict):
             opt_state: Any,
             rng_key: jnp.ndarray,
             batch_size: jnp.ndarray,
-        ):
-            grads, new_model_state = jax.grad(full_objective, has_aux=True)(
+            density_state: int,
+        ) -> Tuple[Any, Any, Any, Any, int]:
+            grads, (new_model_state, density_state) = jax.grad(
+                full_objective, has_aux=True
+            )(
                 trainable_params,
                 non_trainable_params,
                 model_state,
                 rng_key,
                 batch_size,
+                density_state,
                 is_training=True,
                 stl=stl,
             )
@@ -362,10 +420,12 @@ def train_dds(config: configdict.ConfigDict):
 
             updates, opt_state = opt.update(grads, opt_state)
             new_params = optax.apply_updates(trainable_params, updates)
-            return new_params, opt_state, new_model_state
+            return new_params, opt_state, new_model_state, jax.device_get(density_state)
 
         @functools.partial(
-            jax.pmap, axis_name="num_devices", static_broadcasted_argnums=(4, 5, 6, 7)
+            jax.pmap,
+            axis_name="num_devices",
+            static_broadcasted_argnums=(4, 6, 7, 8),
         )
         def jited_val_loss(
             trainable_params,
@@ -373,16 +433,18 @@ def train_dds(config: configdict.ConfigDict):
             model_state: hk.State,
             rng_key: jnp.ndarray,
             batch_size: jnp.ndarray,
+            density_state: int,
             is_training: bool = True,
             ode: bool = False,
             exact: bool = False,
-        ):
-            loss, new_model_state = full_objective(
+        ) -> Tuple[Any, hk.State, int]:
+            loss, (new_model_state, density_state) = full_objective(
                 trainable_params,
                 non_trainable_params,
                 model_state,
                 rng_key,
                 batch_size,
+                density_state,
                 is_training=is_training,
                 ode=ode,
                 stl=False,
@@ -390,7 +452,7 @@ def train_dds(config: configdict.ConfigDict):
             )
 
             loss = jax.lax.pmean(loss, axis_name="num_devices")
-            return loss, new_model_state
+            return loss, new_model_state, density_state
 
         def eval_report(
             trainable_params,
@@ -398,6 +460,7 @@ def train_dds(config: configdict.ConfigDict):
             model_state: hk.State,
             rng_key: jnp.ndarray,
             batch_size: int,
+            density_state: int,
             epoch: int,
             loss_list: List[float],
             is_training: bool = True,
@@ -408,12 +471,15 @@ def train_dds(config: configdict.ConfigDict):
             wandb_key: Optional[str] = None,
             progress_bar: Optional[Any] = None,
         ) -> None:
-            loss, model_state = jited_val_loss(
+            if is_training:
+                wandb_run.log({"density_calls": density_state}, step=epoch)
+            loss, model_state, density_state = jited_val_loss(
                 trainable_params,
                 non_trainable_params,
                 model_state,
                 rng_key,
                 batch_size,
+                density_state,
                 is_training,
                 ode,
                 exact,
@@ -421,40 +487,37 @@ def train_dds(config: configdict.ConfigDict):
             loss = jax.device_get(loss)
             loss = onp.asarray(utils.get_first(loss).item()).item()
 
-            log_string = f"epoch: {epoch}, loss: {loss}"
-            # if print_flag:
-            #     logging.info(log_string)
             if progress_bar:
                 progress_bar.set_description(f"loss: {loss:.3f}")
-            # if config.trainer.notebook and print_flag:
-            #     print(log_string)
 
             loss_list.append(loss)
             if wandb_run:
-                wandb_run.log(
-                    {f"{wandb_key}/epoch": epoch, f"{wandb_key}/loss": loss}, step=epoch
-                )
-            # writer.flush()
+                wandb_run.log({f"{wandb_key}/loss": loss}, step=epoch)
+
+            return loss, density_state
 
         loss_list = []
         loss_list_is = []
         loss_list_pf = []
 
         start = 0
+        density_state_training = jnp.array([0], dtype=jnp.int32)
         times = []
         progress_bar = tqdm.tqdm(list(range(start, config.trainer.epochs)))
         for epoch in progress_bar:
             rng_key = next(seq)
             subkeys = jax.random.split(rng_key, device_no)
 
-            trainable_params, opt_state, model_state = update(
+            trainable_params, opt_state, model_state, density_state_training = update(
                 trainable_params,
                 non_trainable_params,
                 model_state,
                 opt_state,
                 subkeys,
                 batch_size_,
+                density_state_training,
             )
+
             if config.trainer.timer:
 
                 def func():
@@ -466,6 +529,7 @@ def train_dds(config: configdict.ConfigDict):
                             opt_state,
                             subkeys,
                             batch_size_,
+                            density_state_training,
                         )
                     )
 
@@ -477,12 +541,13 @@ def train_dds(config: configdict.ConfigDict):
             )
 
             if epoch % config.trainer.log_every_n_epochs == 0:
-                eval_report(
+                _, _ = eval_report(
                     trainable_params,
                     non_trainable_params,
                     model_state,
                     subkeys,
                     batch_size_elbo,
+                    density_state_training,
                     epoch,
                     loss_list,
                     print_flag=True,
@@ -491,12 +556,13 @@ def train_dds(config: configdict.ConfigDict):
                     progress_bar=progress_bar,
                 )
 
-                eval_report(
+                _, _ = eval_report(
                     trainable_params,
                     non_trainable_params,
                     model_state,
                     subkeys,
                     batch_size_elbo,
+                    density_state_training,
                     epoch,
                     loss_list_is,
                     is_training=False,
@@ -504,46 +570,49 @@ def train_dds(config: configdict.ConfigDict):
                     wandb_key="is_results",
                 )
 
-                eval_report(
-                    trainable_params,
-                    non_trainable_params,
-                    model_state,
-                    subkeys,
-                    batch_size_elbo,
-                    epoch,
-                    loss_list_pf,
-                    is_training=False,
-                    ode=True,
-                    wandb_run=run,
-                    wandb_key="pf_results",
-                )
+                # _, _ = eval_report(
+                #     trainable_params,
+                #     non_trainable_params,
+                #     model_state,
+                #     subkeys,
+                #     batch_size_elbo,
+                #     0,
+                #     epoch,
+                #     loss_list_pf,
+                #     is_training=False,
+                #     ode=True,
+                #     wandb_run=run,
+                #     wandb_key="pf_results",
+                # )
 
                 lr = onp.asarray(exp_lr(epoch).item()).item()
-                run.log({"lr/epoch": epoch, "lr/lr": lr})
+                run.log({"lr/lr": lr}, step=epoch)
 
         loss_list_is_eval, loss_list_eval, loss_list_pf_eval = [], [], []
         for i in range(config.eval.seeds):
             rng_key = next(seq)
             subkeys = jax.random.split(rng_key, device_no)
-            eval_report(
-                trainable_params,
-                non_trainable_params,
-                model_state,
-                subkeys,
-                batch_size_elbo,
-                i,
-                loss_list_eval,
-                print_flag=True,
-                wandb_run=run,
-                wandb_key="elbo_results_eval",
-            )
+            # _, _ = eval_report(
+            #     trainable_params,
+            #     non_trainable_params,
+            #     model_state,
+            #     subkeys,
+            #     batch_size_elbo,
+            #     0,
+            #     i,
+            #     loss_list_eval,
+            #     print_flag=True,
+            #     wandb_run=run,
+            #     wandb_key="elbo_results_eval",
+            # )
 
-            eval_report(
+            _, sampling_density_calls = eval_report(
                 trainable_params,
                 non_trainable_params,
                 model_state,
                 subkeys,
                 batch_size_elbo,
+                jnp.array([0], dtype=jnp.int32),
                 i,
                 loss_list_is_eval,
                 is_training=False,
@@ -551,52 +620,65 @@ def train_dds(config: configdict.ConfigDict):
                 wandb_key="is_results_eval",
             )
 
-            eval_report(
-                trainable_params,
-                non_trainable_params,
-                model_state,
-                subkeys,
-                batch_size_elbo,
-                i,
-                loss_list_pf_eval,
-                is_training=False,
-                ode=True,
-                exact=False,
-                wandb_run=run,
-                wandb_key="pf_results_eval",
-            )
+            # _, _ = eval_report(
+            #     trainable_params,
+            #     non_trainable_params,
+            #     model_state,
+            #     subkeys,
+            #     batch_size_elbo,
+            #     0,
+            #     i,
+            #     loss_list_pf_eval,
+            #     is_training=False,
+            #     ode=True,
+            #     exact=False,
+            #     wandb_run=run,
+            #     wandb_key="pf_results_eval",
+            # )
 
-        params = hk.data_structures.merge(trainable_params, non_trainable_params)
-        if config.trainer.timer:
-            print(times[1:])
+        # params = hk.data_structures.merge(trainable_params, non_trainable_params)
+        # if config.trainer.timer:
+        #     print(times[1:])
 
-        samps = 2500
-        if method == "lgcp" and tfinal >= 12:
-            samps = 100
+        # samps = 2500
+        # if method == "lgcp" and tfinal >= 12:
+        #     samps = 100
 
-        (augmented_trajectory, _), _ = forward_fn_wrap(
-            params, model_state, rng_key, samps
-        )
+        # (augmented_trajectory, _), _ = forward_fn_wrap(
+        #     params, model_state, rng_key, samps
+        # )
 
-        (augmented_trajectory_det, _), _ = forward_fn_wrap(
-            params, model_state, rng_key, samps, True, False
-        )
+        # (augmented_trajectory_det, _), _ = forward_fn_wrap(
+        #     params, model_state, rng_key, samps, True, False
+        # )
 
-        (augmented_trajectory_det_ext, _), _ = forward_fn_wrap(
-            params, model_state, rng_key, samps, True, True
-        )
+        # (augmented_trajectory_det_ext, _), _ = forward_fn_wrap(
+        #     params, model_state, rng_key, samps, True, True
+        # )
 
         results_dict = {
             "elbo": loss_list,
             "is": loss_list_is,
             "pf": loss_list_pf,
-            "elbo_eval": loss_list_eval,
+            # "elbo_eval": loss_list_eval,
             "is_eval": loss_list_is_eval,
-            "pf_eval": loss_list_pf_eval,
-            "aug": augmented_trajectory,
-            "aug_ode": augmented_trajectory_det,
-            "aug_ode_ext": augmented_trajectory_det_ext,
+            # "pf_eval": loss_list_pf_eval,
+            # "aug": augmented_trajectory,
+            # "aug_ode": augmented_trajectory_det,
+            # "aug_ode_ext": augmented_trajectory_det_ext,
         }
+
+        log_z_mean = onp.mean(loss_list_is_eval)
+        log_z_var = onp.var(loss_list_is_eval)
+        run.log(
+            {
+                "final_log_Z": log_z_mean,
+                "var_final_log_Z": log_z_var,
+                "sampling_density_calls": sampling_density_calls,
+            },
+            step=config.trainer.epochs,
+        )
+
         return params, model_state, forward_fn_wrap, rng_key, results_dict
 
 

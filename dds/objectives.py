@@ -5,7 +5,7 @@ from jax import numpy as np
 from jax import scipy as jscipy
 
 
-def ou_terminal_loss(x_terminal, lnpi, sigma=1.0, tfinal=1.0, brown=False):
+def ou_terminal_loss(x_terminal, lnpi, source, density_state, tfinal=1.0, brown=False):
     """Terminal loss under OU reference prior at equilibrium.
 
     Can also be used for Brownian if you let sigma be the diff coef.
@@ -22,23 +22,26 @@ def ou_terminal_loss(x_terminal, lnpi, sigma=1.0, tfinal=1.0, brown=False):
         -(lnπ(X_T) - ln N(X_T; 0, sigma))
     """
 
-    _, d = x_terminal.shape
-    ln_target = lnpi(x_terminal)
+    # _, d = x_terminal.shape
+    ln_target, density_state = lnpi(x_terminal, density_state)
 
     if brown:
         sigma = np.sqrt(tfinal) * sigma
 
-    equi_normal = distrax.MultivariateNormalDiag(
-        np.zeros(d), sigma * np.ones(d)
-    )  # equilibrium distribution
+    # equi_normal = distrax.MultivariateNormalDiag(
+    #     np.zeros(d), sigma * np.ones(d)
+    # )  # equilibrium distribution
+    # log_ou_equilibrium = equi_normal.log_prob(x_terminal)
 
-    log_ou_equilibrium = equi_normal.log_prob(x_terminal)
+    log_ou_equilibrium = source(x_terminal)
     lrnd = -(ln_target - log_ou_equilibrium)
 
-    return lrnd
+    return lrnd, density_state
 
 
-def relative_kl_objective(augmented_trajectory, g, stl=False, trim=2, dim=2):
+def relative_kl_objective(
+    augmented_trajectory, g, density_state, stl=False, trim=2, dim=2
+):
     """Vanilla relative KL control objective.
 
     Args:
@@ -60,12 +63,14 @@ def relative_kl_objective(augmented_trajectory, g, stl=False, trim=2, dim=2):
         augmented_trajectory[:, -1, dim] if stl else 0
     )  # ANGUS when should we use stl term?
 
-    terminal_cost = g(x_final_time)
-    return (energy_cost_dt + terminal_cost + stl).mean()
+    terminal_cost, density_state = g(
+        x_terminal=x_final_time, density_state=density_state
+    )
+    return (energy_cost_dt + terminal_cost + stl).mean(), density_state
 
 
 def prob_flow_lnz(  # ANGUS Probability flow estimate of log normalising constant, called pf results
-    augmented_trajectory, eq_dist, target_dist, _=False, debug=False
+    augmented_trajectory, eq_dist, target_dist, density_state, _=False, debug=False
 ):
     """Vanilla relative KL control objective.
 
@@ -84,7 +89,7 @@ def prob_flow_lnz(  # ANGUS Probability flow estimate of log normalising constan
     x_init_time = augmented_trajectory[:, 0, :-trim]
     x_final_time = augmented_trajectory[:, -1, :-trim]
 
-    ln_gamma = target_dist(x_final_time)
+    ln_gamma, density_state = target_dist(x_final_time, density_state)
     lnq_0 = eq_dist(x_init_time)
     lnq = lnq_0 - trace  # Instantaneous change of variables formula
     lns = ln_gamma - lnq
@@ -96,7 +101,7 @@ def prob_flow_lnz(  # ANGUS Probability flow estimate of log normalising constan
         import pdb
 
         pdb.set_trace()
-    return -lnz
+    return -lnz, density_state
 
 
 def dds_kl_objective(augmented_trajectory, *_, **__):
@@ -117,7 +122,7 @@ def dds_kl_objective(augmented_trajectory, *_, **__):
 
 
 def importance_weighted_partition_estimate(
-    augmented_trajectory, g, dim=2
+    augmented_trajectory, g, density_state, dim=2
 ):  # ANGUS this is what's called 'is' results and what should be reported as the lnZ estimate
     """See TODO.
 
@@ -135,12 +140,14 @@ def importance_weighted_partition_estimate(
 
     stl = augmented_trajectory[:, -1, dim]
 
-    terminal_cost = g(x_final_time)
+    terminal_cost, density_state = g(
+        x_terminal=x_final_time, density_state=density_state
+    )
     s_omega = -(energy_cost_dt + terminal_cost + stl)  # Equation (19)
 
     ln_numsamp = np.log(s_omega.shape[0])
     lnz = jscipy.special.logsumexp(s_omega, axis=0) - ln_numsamp  # ANGUS averaging
-    return -lnz  # ANGUS why the extra - here?
+    return lnz, density_state  # ANGUS why the extra - here?
 
 
 def importance_weighted_partition_estimate_dds(augmented_trajectory, _):

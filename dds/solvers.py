@@ -89,6 +89,7 @@ def sdeint_ito_em_scan_ou(
     g,
     y0,
     rng,
+    density_state,
     args=(),
     dt=1e-06,
     step_scheme=uniform_step_scheme,
@@ -132,7 +133,7 @@ def sdeint_ito_em_scan_ou(
     t_pas = ts[0]
 
     def euler_step(ytpas, t_):
-        (y_pas, t_pas, rng) = ytpas
+        (y_pas, t_pas, rng, density_state) = ytpas
 
         delta_t = t_ - t_pas
 
@@ -153,8 +154,8 @@ def sdeint_ito_em_scan_ou(
         noise = jax.random.normal(this_rng, y_pas.shape, dtype=dtype)
 
         y_pas_naug = jax.lax.stop_gradient(y_pas[:, :dim]) if detach else y_pas[:, :dim]
-        g_aug = g(y_pas, t_pas, args)
-        f_aug = f(y_pas, t_pas, args)
+        g_aug, density_state = g(y_pas, t_pas, density_state, args)
+        f_aug, density_state = f(y_pas, t_pas, density_state, args)
 
         # State update
         y_naug = (
@@ -194,12 +195,13 @@ def sdeint_ito_em_scan_ou(
 
         # t_pas = t_
         # y_pas = y
-        out = (y, t_, rng)
+        out = (y, t_, rng, density_state)
         return out, y
 
-    _, ys = hk.scan(euler_step, (y_pas, t_pas, rng), ts[1:])
+    final_carry, ys = hk.scan(euler_step, (y_pas, t_pas, rng, density_state), ts[1:])
+    density_state = final_carry[-1]
 
-    return np.swapaxes(np.concatenate((y0[None], ys), axis=0), 0, 1), ts
+    return np.swapaxes(np.concatenate((y0[None], ys), axis=0), 0, 1), ts, density_state
 
 
 def odeint_em_scan_ou(

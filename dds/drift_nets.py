@@ -288,6 +288,7 @@ class PISGRADNet(hk.Module):
         input_array: np.ndarray,
         time_array: np.ndarray,
         target: Optional[Callable[[np.ndarray], np.ndarray]] = None,
+        density_state: Optional[int]=None,
         training: Optional[bool] = True,
         ode: Optional[bool] = False,
     ) -> np.ndarray:
@@ -308,7 +309,14 @@ class PISGRADNet(hk.Module):
 
         grad_bool = self.stop_grad and not ode
         # Using score information as a feature
-        grad = hk.grad(lambda _x: target(_x).sum())(input_array)
+        # grad = hk.grad(lambda _x: target(_x).sum())(input_array)
+
+        def summed_target(x, density_state):
+            logprob, density_state = target(x, density_state)
+            return logprob.sum(), density_state
+        
+        grad, density_state = hk.grad(summed_target, has_aux=True)(input_array, density_state)
+
         #     print("grad bool", grad_bool)
         grad = jax.lax.stop_gradient(grad) if grad_bool else grad
         grad = np.clip(grad, -self.lgv_clip, self.lgv_clip)
@@ -322,4 +330,4 @@ class PISGRADNet(hk.Module):
         out_state = np.clip(out_state, -self.nn_clip, self.nn_clip)
 
         out_state_p_grad = out_state + t_net_2 * grad
-        return out_state_p_grad
+        return out_state_p_grad, density_state
