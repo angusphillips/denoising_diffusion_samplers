@@ -76,6 +76,36 @@ def cos_sq_fn_step_scheme(start, end, dt, s=0.008, dtype=np.float32, **_):
     return dts_out
 
 
+def cos_sq_fn_step_scheme_unnorm(start, end, dt, s=0.008, dtype=np.float32, **_):
+    """Exponential decay step scheme from Nichol and Dhariwal 2021.
+
+    Args:
+      start: start time defaults to 0
+      end: end time defaults to 1
+      dt: number of steps to divide grid into
+      s: shift to ensure non 0
+      dtype: for tpu support
+      **_: placeholder to handle different scheme args
+
+    Returns:
+      time grid
+    """
+    n_steps = int((end - start) / dt)
+
+    pre_phase = np.linspace(start, end, n_steps, dtype=dtype) / end
+    phase = ((pre_phase + s) / (1 + s)) * np.pi * 0.5
+    # Note this multiples small numbers however implemented it more stably
+    # (removed sqrt from solver only sqrd here) and it made no difference to
+    # results
+    dts = np.cos(phase) ** 4
+
+    # dts /= dts.sum()
+    # dts *= end  # We normalise s.t. \sum_k \beta_k = T (where beta_k = b_m*cos^4)
+
+    dts_out = np.concatenate((np.array([start]), np.cumsum(dts)))
+    return dts_out
+
+
 def triangle_step_scheme(
     start, end, dt, dt_max=0.2, dt_min=0.01, f=np.exp, dtype=np.float32, **_
 ):
