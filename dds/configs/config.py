@@ -18,7 +18,10 @@ import optax
 # from dds.configs import pretrained_nice_config
 # from dds.configs import vae_config
 
-from dds.discretisation_schemes import cos_sq_fn_step_scheme
+from dds.discretisation_schemes import (
+    cos_sq_fn_step_scheme,
+    cos_sq_fn_step_scheme_unnorm,
+)
 from dds.discretisation_schemes import exp_fn_step_scheme
 from dds.discretisation_schemes import linear_step_scheme
 from dds.discretisation_schemes import linear_step_scheme_dds
@@ -47,7 +50,14 @@ from dds.stl_samplers import AugmentedControlledAIS
 from dds.stl_samplers import ULAAIS
 
 from dds.targets import toy_targets
-from dds.targets.distributions import FunnelDistribution
+from dds.targets.distributions import (
+    BayesianLogisticRegression,
+    BrownianMissingMiddleScales,
+    ChallengingTwoDimensionalMixture,
+    FunnelDistribution,
+    NormalDistributionWrapper,
+    LogGaussianCoxPines,
+)
 
 from dds.udp_samplers import AugmentedOUDFollmerSDEUDP
 
@@ -70,7 +80,7 @@ def get_config() -> configdict.ConfigDict:
     config.model.learn_betas = False
     config.trainer.timer = False
 
-    config.model.batch_size = 512  # 128
+    config.model.batch_size = 300  # 128
     config.model.elbo_batch_size = 2000
     config.model.terminal_cost = ou_terminal_loss
     config.model.tfinal = 1.0
@@ -99,6 +109,7 @@ def get_config() -> configdict.ConfigDict:
     config.model.step_scheme_dict = configdict.ConfigDict()
     config.model.step_scheme_dict.exp_dec = exp_fn_step_scheme
     config.model.step_scheme_dict.cos_sq = cos_sq_fn_step_scheme
+    config.model.step_scheme_dict.cos_sq_unnorm = cos_sq_fn_step_scheme_unnorm
     config.model.step_scheme_dict.uniform = uniform_step_scheme
     config.model.step_scheme_dict.last_small = small_lst_step_scheme
     config.model.step_scheme_dict.linear_dds = linear_step_scheme_dds
@@ -125,7 +136,7 @@ def get_config() -> configdict.ConfigDict:
 
     config.trainer.learning_rate = 0.0001
 
-    config.trainer.epochs = 2500
+    config.trainer.epochs = 10000
     config.trainer.log_every_n_epochs = 1
 
     config.trainer.lr_sch_base_dec = 1.0  # 0.95 For funnel as per PIS repo
@@ -180,20 +191,17 @@ def set_task(
     """
     config.task = task
 
-    # if task == "lr_sonar" or task == "ion":
-    #     config = log_reg_config.make_log_reg_config(config)
-    # elif task == "lgcp":
-    #     config = lgcp_config.make_config(config)
-    # elif task == "vae":
-    #     config = vae_config.make_config(config)
-    # elif task == "nice":
-    #     config = pretrained_nice_config.make_config(config)
-    #     config.model.fully_connected_units = [512, 256, 64]
-    #     config.model.learn_betas = True
-    # elif task == "brownian":
-    #     config = brownian_config.make_config(config)
+    if task == "difficult_gaussian":
+        config.model.input_dim = 1
+        target_distribution = NormalDistributionWrapper(2.75, 0.25, 1, is_target=True)
+        config.target_distribution = target_distribution
 
-    if task == "funnel":
+    elif task == "difficult_2d":
+        config.model.input_dim = 2
+        target_distribution = ChallengingTwoDimensionalMixture(dim=2, is_target=True)
+        config.target_distribution = target_distribution
+
+    elif task == "funnel":
         config.model.input_dim = 10
         target_distribution = FunnelDistribution(
             dim=config.model.input_dim, is_target=True
@@ -205,33 +213,36 @@ def set_task(
         config.trainer.learning_rate = 5 * 10 ** (-3)
         config.trainer.lr_sch_base_dec = 0.95
 
-    elif task == "mixture_well":
-        config.model.input_dim = 2
-        config.model.sigma = 1.15
-        config.model.alpha = 0.4
-
-        log_prob_funn, _, plot_dist = toy_targets.mixture_well()
-
-        config.trainer.lnpi = log_prob_funn
-        config.model.target = log_prob_funn
-        config.model.plot_dist = plot_dist
-    elif task == "simple_gaussian":
-        config.model.input_dim = 2
-
-        log_prob_funn, _, plot_dist = toy_targets.simple_gaussian()
-
-        config.trainer.lnpi = log_prob_funn
-        config.model.target = log_prob_funn
-        config.model.plot_dist = plot_dist
-    elif task == "far_gaussian":
-        config.model.input_dim = 2
-        log_prob_funn, _, plot_dist = toy_targets.far_gaussian(
-            mean=config.trainer.simple_gaus_mean
+    elif task == "ion":
+        config.model.input_dim = 35
+        target_distribution = BayesianLogisticRegression(
+            file_path="/vols/ziz/not-backed-up/anphilli/denoising_diffusion_samplers/data/ionosphere_full.pkl",
+            is_target=True,
         )
+        config.target_distribution = target_distribution
 
-        config.trainer.lnpi = log_prob_funn
-        config.model.target = log_prob_funn
-        config.model.plot_dist = plot_dist
+    elif task == "sonar":
+        config.model.input_dim = 61
+        target_distribution = BayesianLogisticRegression(
+            file_path="/vols/ziz/not-backed-up/anphilli/denoising_diffusion_samplers/data/sonar_full.pkl",
+            is_target=True,
+        )
+        config.target_distribution = target_distribution
+
+    elif task == "brownian":
+        config.model.input_dim = 32
+        target_distribution = BrownianMissingMiddleScales(dim=32, is_target=True)
+        config.target_distribution = target_distribution
+
+    elif task == "lgcp":
+        config.model.input_dim = 1600
+        target_distribution = LogGaussianCoxPines(
+            file_path="/vols/ziz/not-backed-up/anphilli/denoising_diffusion_samplers/data/fpines.csv",
+            use_whitened=False,
+            dim=1600,
+            is_target=True,
+        )
+        config.target_distribution = target_distribution
     else:
         raise BaseException("Task config not implemented")
 
