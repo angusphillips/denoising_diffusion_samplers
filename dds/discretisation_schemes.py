@@ -67,7 +67,7 @@ def cos_sq_fn_step_scheme(start, end, dt, s=0.008, dtype=np.float32, **_):
     # Note this multiples small numbers however implemented it more stably
     # (removed sqrt from solver only sqrd here) and it made no difference to
     # results
-    dts = np.cos(phase) ** 2
+    dts = np.cos(phase) ** 4
 
     dts /= dts.sum()
     dts *= end  # We normalise s.t. \sum_k \beta_k = T (where beta_k = b_m*cos^4)

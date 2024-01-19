@@ -142,7 +142,9 @@ def sdeint_ito_em_scan_ou(
             # beta_k = np.sqrt(1.0 - alpha_k**2) but the scale is harder to compare to
             # PIS and grid search so we are sticking to this notation/setup which is
             # more inline with DDPM and SDE score matching
-            beta_k = np.clip(alpha * delta_t, 0, 1)  # read sqrt alpha_k in paper
+            beta_k = np.clip(
+                alpha * delta_t, 0, 1
+            )  # read sqrt alpha_k in paper # Note that this should be sqrt(delta_t) for the cos_sq step scheme
             alpha_k = np.clip(
                 np.sqrt(1.0 - beta_k**2), 0, 0.99999
             )  # read sqrt(1-alpha_k) in paper
