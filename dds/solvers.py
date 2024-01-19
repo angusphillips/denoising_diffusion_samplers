@@ -142,8 +142,10 @@ def sdeint_ito_em_scan_ou(
             # beta_k = np.sqrt(1.0 - alpha_k**2) but the scale is harder to compare to
             # PIS and grid search so we are sticking to this notation/setup which is
             # more inline with DDPM and SDE score matching
-            beta_k = np.clip(alpha * np.sqrt(delta_t), 0, 1) # read sqrt alpha_k in paper
-            alpha_k = np.sqrt(1.0 - beta_k**2) # read sqrt(1-alpha_k) in paper
+            beta_k = np.clip(alpha * delta_t, 0, 1)  # read sqrt alpha_k in paper
+            alpha_k = np.clip(
+                np.sqrt(1.0 - beta_k**2), 0, 0.99999
+            )  # read sqrt(1-alpha_k) in paper
         else:  # more formal OU closed form transition looking parametrisation
             alpha_k = np.clip(np.exp(-alpha * delta_t), 0, 0.99999)
             beta_k = np.sqrt(1.0 - alpha_k**2)
@@ -164,7 +166,7 @@ def sdeint_ito_em_scan_ou(
             + (g_aug[:, :dim] * noise[:, :dim]) * beta_k  # sqrt{alpha_k} in eq (18)
         )
         #     import pdb; pdb.set_trace()
-        # Stoch int (detached STL term) update #ANGUS here is stl again - what is this update? Perhaps the second term in equation (9), which in discrete time is the second term of equation (19)
+        # Stoch int (detached STL term) update
         u_dw = (
             np.squeeze(y_pas[:, dim : dim + 1])
             + np.einsum("ij,ij->i", g_aug[:, dim:-1], noise[:, :dim]) * beta_k

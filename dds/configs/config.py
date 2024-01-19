@@ -151,7 +151,7 @@ def get_config() -> configdict.ConfigDict:
     config.model.detach_path = False
     config.model.log = False
 
-    config.model.exp_dds = False  # ANGUS says whether to use DDPM parametrisation
+    config.model.exp_dds = False  # ANGUS False = use ddpm_param
 
     config.trainer.random_seed = 0
 

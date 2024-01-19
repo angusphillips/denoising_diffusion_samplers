@@ -52,16 +52,14 @@ def relative_kl_objective(
 
     Returns:
         kl control loss
-    """  # ANGUS this is the objective equation (10) from the paper.
+    """
 
     energy_cost_dt = augmented_trajectory[:, -1, -1]
     x_final_time = augmented_trajectory[:, -1, :dim]
 
     # import pdb; pdb.set_trace()
 
-    stl = (
-        augmented_trajectory[:, -1, dim] if stl else 0
-    )  # ANGUS when should we use stl term?
+    stl = augmented_trajectory[:, -1, dim] if stl else 0
 
     terminal_cost, density_state = g(
         x_terminal=x_final_time, density_state=density_state
