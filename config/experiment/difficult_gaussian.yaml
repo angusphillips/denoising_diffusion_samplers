@@ -1,0 +1,8 @@
+# @package _global_
+
+task: 'difficult_gaussian'
+
+use_vi_approx: False
+
+lr: 1e-4
+exp_decay: 0.95

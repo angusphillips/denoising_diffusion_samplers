@@ -434,7 +434,7 @@ class LogGaussianCoxPines(Distribution):
         dim: int = 1600,
         is_target: bool = False,
     ):
-        super().__init__(dim)
+        super().__init__(dim, is_target=is_target)
 
         # Discretization is as in Controlled Sequential Monte Carlo
         # by Heng et al 2017 https://arxiv.org/abs/1708.08396
@@ -527,6 +527,7 @@ class LogGaussianCoxPines(Distribution):
     def sample(self, key: Key, num_samples: int) -> Array:
         return NotImplementedError("LGCP target cannot be sampled")
 
+
 class BayesianLogisticRegression(Distribution):
     def __init__(self, file_path: str, is_target: bool = False):
         # load data
@@ -573,6 +574,7 @@ class BayesianLogisticRegression(Distribution):
 
     def sample(self, key: Key, num_samples: int):
         return NotImplementedError("Logistic regression target cannot be sampled")
+
 
 class BrownianMissingMiddleScales(Distribution):
     def __init__(self, dim: int = 32, is_target: bool = False):

@@ -18,6 +18,7 @@ def sdeint_ito_em_scan(
     g,
     y0,
     rng,
+    density_state,
     args=(),
     dt=1e-06,
     g_prod=None,
@@ -50,9 +51,10 @@ def sdeint_ito_em_scan(
     scheme_args = scheme_args if scheme_args is not None else {}
     if g_prod is None:
 
-        def g_prod(y, t, args, noise):
-            out = g(y, t, args) * noise
-            return out
+        def g_prod(y, t, density_state, args, noise):
+            g_, density_state = g(y, t, density_state, args)
+            out = g_ * noise
+            return out, density_state
 
     ts = step_scheme(start, end, dt, dtype=dtype, **scheme_args)
 
@@ -60,26 +62,30 @@ def sdeint_ito_em_scan(
     t_pas = ts[0]
 
     def euler_step(ytpas, t_):
-        (y_pas, t_pas, rng) = ytpas
+        (y_pas, t_pas, rng, density_state) = ytpas
 
         delta_t = t_ - t_pas
 
         this_rng, rng = jax.random.split(rng)
         noise = jax.random.normal(this_rng, y_pas.shape, dtype=dtype)
 
-        f_full = f(y_pas, t_pas, args)
-        g_full = g_prod(y_pas, t_pas, args, noise)
+        f_full, density_state = f(y_pas, t_pas, density_state, args)
+        g_full, density_state = g_prod(y_pas, t_pas, density_state, args, noise)
 
         y = y_pas + f_full * delta_t + g_full * np.sqrt(delta_t)
 
         # t_pas = t_
         # y_pas = y
-        out = (y, t_, rng)
+        out = (y, t_, rng, density_state)
         return out, y
 
-    _, ys = hk.scan(euler_step, (y_pas, t_pas, rng), ts[1:])
+    final_carry, ys = hk.scan(euler_step, (y_pas, t_pas, rng, density_state), ts[1:])
 
-    return np.swapaxes(np.concatenate((y0[None], ys), axis=0), 0, 1), ts
+    return (
+        np.swapaxes(np.concatenate((y0[None], ys), axis=0), 0, 1),
+        ts,
+        final_carry[-1],
+    )
 
 
 def sdeint_ito_em_scan_ou(

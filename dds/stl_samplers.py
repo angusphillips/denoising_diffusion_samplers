@@ -111,7 +111,7 @@ class AugmentedBrownianFollmerSDESTL(hk.Module):
         """
         return np.zeros((n, self.dim))
 
-    def f_aug(self, y, t, args):
+    def f_aug(self, y, t, density_state, args):
         """Computes the drift of the SDE + augmented state space for loss.
 
         Computes drift and auxiliary variables for the SDE:
@@ -129,18 +129,21 @@ class AugmentedBrownianFollmerSDESTL(hk.Module):
 
         y_no_aug = y[..., : self.dim]
 
-        u_t = self.drift_network(y_no_aug, t_, self.target)
+        u_t, density_state = self.drift_network(
+            y_no_aug, t_, self.target, density_state
+        )
 
-        gamma_t = self.g_aug(y, t, args)[..., : self.dim] ** 2
+        gamma_t_, density_state = self.g_aug(y, t, density_state, args)
+        gamma_t = gamma_t_[..., : self.dim] ** 2
 
         u_t_normsq = ((u_t) ** 2 / gamma_t).sum(axis=-1)[..., None] / 2.0
 
         n, _ = y_no_aug.shape
         zeros = np.zeros((n, 1))
 
-        return np.concatenate((u_t, zeros, u_t_normsq), axis=-1)
+        return np.concatenate((u_t, zeros, u_t_normsq), axis=-1), density_state
 
-    def g_aug(self, y, t, args):
+    def g_aug(self, y, t, density_state, args):
         r"""Computes the diff coefficient of the SDE+augmented state space for loss.
 
         Computes drift and auxiliary variables for the SDE:
@@ -168,13 +171,17 @@ class AugmentedBrownianFollmerSDESTL(hk.Module):
         # stl vs no stl, here we compute drift(y,t) for the dim:2*dim-1 locs of
         # the augmented state space (drift(y,t)/C).
         if self.detach_drift_stoch:
-            u_t = self.detached_drift(y_no_aug, t_, self.target)
+            u_t, density_state = self.detached_drift(
+                y_no_aug, t_, self.target, density_state
+            )
         else:
-            u_t = self.drift_network(y_no_aug, t_, self.target)
+            u_t, density_state = self.drift_network(
+                y_no_aug, t_, self.target, density_state
+            )
 
         out = np.concatenate((gamma_, u_t / gamma_, zeros), axis=-1)
 
-        return out
+        return out, density_state
 
     def sample_aug_trajectory(
         self, batch_size, key, density_state, dt=0.05, rng=None, **_
@@ -184,7 +191,7 @@ class AugmentedBrownianFollmerSDESTL(hk.Module):
         zeros = np.zeros((batch_size, 1))
         y0_aug = np.concatenate((y0, zeros, zeros), axis=1)
 
-        def g_prod(y, t, args, noise):
+        def g_prod(y, t, density_state, args, noise):
             """Defines how to compute the product between the aug diff coef and noise.
 
             This function specifies how the brownian noise is multiplied with the
@@ -201,7 +208,7 @@ class AugmentedBrownianFollmerSDESTL(hk.Module):
             Returns:
               Returns g_aug(Y_t, t) * dW_t
             """
-            g_aug = self.g_aug(y, t, args)
+            g_aug, density_state = self.g_aug(y, t, density_state, args)
 
             # We assume diagonal noise and thus g(t) dW_t is elementwise
             gdw = g_aug[:, : self.dim] * noise[:, : self.dim]
@@ -212,14 +219,18 @@ class AugmentedBrownianFollmerSDESTL(hk.Module):
             # the last coordinate is a 0 as it evolves ||u(Y_t,t)||^2/C noiselessly
             zeros = 0.0 * g_aug[:, -1] * noise[:, -1]
 
-            return np.concatenate((gdw, udw[..., None], zeros[..., None]), axis=-1)
+            return (
+                np.concatenate((gdw, udw[..., None], zeros[..., None]), axis=-1),
+                density_state,
+            )
 
-        param_trajectory, ts = sdeint_ito_em_scan(
+        param_trajectory, ts, density_state = sdeint_ito_em_scan(
             self.dim,
             self.f_aug,
             self.g_aug,
             y0_aug,
             key,
+            density_state,
             dt=dt,
             g_prod=g_prod,
             end=self.tfinal,

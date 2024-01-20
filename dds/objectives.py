@@ -25,8 +25,8 @@ def ou_terminal_loss(x_terminal, lnpi, source, density_state, tfinal=1.0, brown=
     # _, d = x_terminal.shape
     ln_target, density_state = lnpi(x_terminal, density_state)
 
-    if brown:
-        sigma = np.sqrt(tfinal) * sigma
+    # if brown:
+    #     sigma = np.sqrt(tfinal) * sigma
 
     # equi_normal = distrax.MultivariateNormalDiag(
     #     np.zeros(d), sigma * np.ones(d)

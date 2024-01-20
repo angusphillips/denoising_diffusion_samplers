@@ -1,0 +1,8 @@
+# @package _global_
+
+task: 'difficult_2d'
+
+use_vi_approx: True
+
+lr: 1e-4
+exp_decay: 0.95

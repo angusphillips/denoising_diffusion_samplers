@@ -132,21 +132,6 @@ def train_dds(config: configdict.ConfigDict):
         sigma = config.model.sigma
         m = config.model.m
 
-        # post setup model vars
-        # config.model.source_obj = distrax.MultivariateNormalDiag(
-        #     jnp.zeros(config.model.input_dim),
-        #     config.model.sigma * jnp.ones(config.model.input_dim),
-        # )
-        config.model.source_obj = NormalDistributionWrapper(
-            mean=0.0,
-            scale=config.model.sigma,
-            dim=config.model.input_dim,
-            is_target=False,
-        )
-        config.model.source = lambda x: config.model.source_obj.evaluate_log_density(
-            x, 0
-        )[0]
-
         batch_size_ = int(config.model.batch_size / device_no)
         batch_size_elbo = int(config.model.elbo_batch_size / device_no)
 
@@ -217,6 +202,32 @@ def train_dds(config: configdict.ConfigDict):
 
         ############## wandb logging  place holder ################
         data_id = "denoising_diffusion_samplers"  # Project name
+
+        # post setup model vars
+        # config.model.source_obj = distrax.MultivariateNormalDiag(
+        #     jnp.zeros(config.model.input_dim),
+        #     config.model.sigma * jnp.ones(config.model.input_dim),
+        # )
+        if brown:
+            config.model.source_obj = NormalDistributionWrapper(
+                mean=0.0,
+                scale=config.model.sigma * jnp.sqrt(config.model.tfinal),
+                dim=config.model.input_dim,
+                is_target=False,
+            )
+            config.model.source = (
+                lambda x: config.model.source_obj.evaluate_log_density(x, 0)[0]
+            )
+        else:
+            config.model.source_obj = NormalDistributionWrapper(
+                mean=0.0,
+                scale=config.model.sigma,
+                dim=config.model.input_dim,
+                is_target=False,
+            )
+            config.model.source = (
+                lambda x: config.model.source_obj.evaluate_log_density(x, 0)[0]
+            )
 
         def _forward_fn(
             batch_size: int,

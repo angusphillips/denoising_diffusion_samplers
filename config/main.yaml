@@ -2,20 +2,17 @@
 
 defaults:
   - _self_
-  - server: local
+  - /server: local
+  - /experiment: difficult_gaussian
+  - /method: dds
 
 run_name: ${hydra:job.override_dirname}
-experiment: 'difficult_gaussian'
-group: ${experiment}
+group: ${task}
 seed: 0
 
-use_vi_approx: True
-
-tf: 6.4
-num_steps: 128
+num_steps: 16
 sigma: 1.0
-alpha: 0.6875
-
-step_scheme: cos_sq
+alpha: 0.1
+tf: 1.0
 
 log_every_n_epochs: 100
