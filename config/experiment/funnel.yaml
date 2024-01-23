@@ -4,5 +4,6 @@ task: 'funnel'
 
 use_vi_approx: True
 
-lr: 5e-4
-exp_decay: 0.95
+lr: 1e-3
+exp_decay: 1.0
+base_steps: 2

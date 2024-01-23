@@ -4,5 +4,6 @@ task: 'difficult_gaussian'
 
 use_vi_approx: False
 
-lr: 1e-4
+lr: 1e-3
 exp_decay: 0.95
+base_steps: 1

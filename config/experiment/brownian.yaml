@@ -4,5 +4,6 @@ task: 'brownian'
 
 use_vi_approx: True
 
-lr: 1e-4
+lr: 1e-3
 exp_decay: 0.95
+base_steps: 1

@@ -280,6 +280,10 @@ def train_dds(config: configdict.ConfigDict):
             lambda module, name, value: "stl_detach" not in module, params
         )
 
+        nb_params = sum(x.size for x in jax.tree_util.tree_leaves(trainable_params))
+        logging.info(f"Number of parameters: {nb_params}")
+        run.log({"nb_params": nb_params}, step=0)
+
         clipper = optax.clip(1.0)
         base_dec = config.trainer.lr_sch_base_dec
         scale_by_adam = optax.scale_by_adam()
@@ -603,19 +607,19 @@ def train_dds(config: configdict.ConfigDict):
         for i in range(config.eval.seeds):
             rng_key = next(seq)
             subkeys = jax.random.split(rng_key, device_no)
-            # _, _ = eval_report(
-            #     trainable_params,
-            #     non_trainable_params,
-            #     model_state,
-            #     subkeys,
-            #     batch_size_elbo,
-            #     0,
-            #     i,
-            #     loss_list_eval,
-            #     print_flag=True,
-            #     wandb_run=run,
-            #     wandb_key="elbo_results_eval",
-            # )
+            _, _ = eval_report(
+                trainable_params,
+                non_trainable_params,
+                model_state,
+                subkeys,
+                batch_size_elbo,
+                jnp.array([0], dtype=jnp.int32),
+                i,
+                loss_list_eval,
+                print_flag=True,
+                wandb_run=run,
+                wandb_key="elbo_results_eval",
+            )
 
             _, sampling_density_calls = eval_report(
                 trainable_params,
@@ -671,7 +675,7 @@ def train_dds(config: configdict.ConfigDict):
             "elbo": loss_list,
             "is": loss_list_is,
             "pf": loss_list_pf,
-            # "elbo_eval": loss_list_eval,
+            "elbo_eval": loss_list_eval,
             "is_eval": loss_list_is_eval,
             # "pf_eval": loss_list_pf_eval,
             # "aug": augmented_trajectory,
@@ -686,9 +690,14 @@ def train_dds(config: configdict.ConfigDict):
                 "final_log_Z": log_z_mean,
                 "var_final_log_Z": log_z_var,
                 "sampling_density_calls": sampling_density_calls,
+                "final_elbo": onp.mean(loss_list_eval),
             },
             step=config.trainer.epochs,
         )
+
+        if config.save_samples:
+            filename = f"/data/ziz/not-backed-up/anphilli/diffusion_smc/{config.wandb.group}/{config.task}_{config.model.reference_process_key}_{config.model.num_steps}_{config.seed}.csv"
+            onp.savetxt(filename, onp.array(loss_list_is_eval))
 
         return params, model_state, forward_fn_wrap, rng_key, results_dict
 

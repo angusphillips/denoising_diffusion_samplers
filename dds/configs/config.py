@@ -210,8 +210,6 @@ def set_task(
         config.target_distribution = target_distribution
         config.model.elbo_batch_size = 2000
         config.vi_approx.iters = 50_000
-        config.trainer.learning_rate = 5 * 10 ** (-3)
-        config.trainer.lr_sch_base_dec = 0.95
 
     elif task == "ion":
         config.model.input_dim = 35
