@@ -221,6 +221,7 @@ def odeint_em_scan_ou(
     g,
     y0,
     rng,
+    density_state,
     args=(),
     dt=1e-06,
     step_scheme=uniform_step_scheme,
@@ -264,10 +265,13 @@ def odeint_em_scan_ou(
     t_pas = ts[0]
     _, _ = g, rng
 
-    f_div = get_div_fn(f, rng, y0[:, :dim].shape, exact=exact)
+    def f_partial(x, t, args):
+        return f(x, t, density_state, args)[0]
+
+    f_div = get_div_fn(f_partial, rng, y0[:, :dim].shape, exact=exact)
 
     def euler_step(ytpas, t_):
-        (y_pas, t_pas, k, rng) = ytpas
+        (y_pas, t_pas, k, rng, density_state) = ytpas
 
         delta_t = t_ - t_pas
         # delta_t2 = ts[k+1] - t_
@@ -284,7 +288,7 @@ def odeint_em_scan_ou(
 
         y_pas_naug = y_pas[:, :dim]
         # g_aug = g(y_pas, t_pas, args)
-        f_aug = f(y_pas, t_pas, args)
+        f_aug, density_state = f(y_pas, t_pas, density_state, args)
 
         # State update (deterministic ODE)
         # beta_^2 \approx 2 delta beta_cont_t
@@ -295,7 +299,7 @@ def odeint_em_scan_ou(
         k1 = f_aug[:, :]
         y_pass_prime = y_pas + beta_k_sq * 0.5 * k1 * q
         t_n = t_pas + p * delta_t
-        k2 = f(y_pass_prime, t_n, args)
+        k2, density_state = f(y_pass_prime, t_n, density_state, args)
         y_naug = y_pas_naug + beta_k_sq * 0.5 * (a2 * k2[:, :dim] + a1 * k1[:, :dim])
 
         # Hutchinsons trace estimator (Again integrating with Heun)
@@ -312,7 +316,7 @@ def odeint_em_scan_ou(
         # t_pas = t_
         # y_pas = y
         k += 1
-        out = (y, t_, k, rng)
+        out = (y, t_, k, rng, density_state)
         return out, y
 
     # def ode_func(y, t):
@@ -322,7 +326,7 @@ def odeint_em_scan_ou(
 
     k = 0
     # if ddpm_param:
-    _, ys = hk.scan(euler_step, (y_pas, t_pas, k, rng), ts[1:])
+    final_carry, ys = hk.scan(euler_step, (y_pas, t_pas, k, rng, density_state), ts[1:])
 
     # Reverse ODE approach, kinda works not as good.
     # ts_back = np.flip(ts, axis=0)
@@ -337,7 +341,11 @@ def odeint_em_scan_ou(
 
     # ys_out = np.concatenate((ys_state, trace_back, trace_front), axis=-1)
 
-    return np.swapaxes(np.concatenate((y0[None], ys), axis=0), 0, 1), ts
+    return (
+        np.swapaxes(np.concatenate((y0[None], ys), axis=0), 0, 1),
+        ts,
+        final_carry[-1],
+    )
 
 
 def sdeint_udp_ito_em_scan_ou(
