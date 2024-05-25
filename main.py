@@ -51,6 +51,7 @@ def main(hydra_config):
     if hydra_config.reference_process_key == "pisstl":
         hydra_config.use_vi_approx = False
     task_config.use_vi_approx = hydra_config.use_vi_approx
+    task_config.trainer.epochs = hydra_config.epochs
     task_config.trainer.log_every_n_epochs = hydra_config.log_every_n_epochs
     task_config.trainer.learning_rate = hydra_config.lr
     task_config.trainer.lr_sch_base_dec = hydra_config.exp_decay

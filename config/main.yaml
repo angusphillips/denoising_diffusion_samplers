@@ -15,5 +15,6 @@ sigma: 1.0
 alpha: 1.0
 tf: 1.0
 
+epochs: 10000
 log_every_n_epochs: 100
 save_samples: False

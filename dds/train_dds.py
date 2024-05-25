@@ -3,6 +3,7 @@
 For training diffusion based samplers (OU reversal SDE and Follmer SDE )
 """
 import functools
+import time
 import timeit
 from typing import Any, List, Tuple, Optional
 from absl import app, flags
@@ -511,14 +512,44 @@ def train_dds(config: configdict.ConfigDict):
 
             return loss, density_state
 
+        def log_Z_eval_wrapper(params, model_state, key):
+            subkeys = jax.random.split(key, device_no)
+            loss, model_state, _ = jited_val_loss(
+                params[0],
+                params[1],
+                model_state,
+                subkeys,
+                config.model.elbo_batch_size,
+                jnp.array([0], dtype=jnp.int32),
+                False,
+                False,
+                False,
+            )
+            loss = jax.device_get(loss)
+            # loss = onp.asarray(utils.get_first(loss).item()).item()
+            return loss
+
+        def logZ_eval(params, model_state, key):
+            keys = jax.random.split(key, config.eval.seeds)
+            logZarray = jax.vmap(
+                lambda key: log_Z_eval_wrapper(params, model_state, key)
+            )(keys)
+            return logZarray
+
+        logZ_eval_jit = jax.jit(logZ_eval)
+
         loss_list = []
         loss_list_is = []
         loss_list_pf = []
+        log_array = onp.zeros(
+            (config.trainer.epochs // config.trainer.log_every_n_epochs, 4)
+        )
 
         start = 0
         density_state_training = jnp.array([0], dtype=jnp.int32)
         times = []
         progress_bar = tqdm.tqdm(list(range(start, config.trainer.epochs)))
+        start_time = time.time()
         for epoch in progress_bar:
             rng_key = next(seq)
             subkeys = jax.random.split(rng_key, device_no)
@@ -556,6 +587,16 @@ def train_dds(config: configdict.ConfigDict):
             )
 
             if epoch % config.trainer.log_every_n_epochs == 0:
+                log_Z = logZ_eval_jit(
+                    [trainable_params, non_trainable_params], model_state, key
+                )
+                log_array[(epoch // config.trainer.log_every_n_epochs) - 1, :] = (
+                    epoch,
+                    density_state_training,
+                    log_Z.mean(),
+                    log_Z.var(),
+                )
+
                 _, _ = eval_report(
                     trainable_params,
                     non_trainable_params,
@@ -602,102 +643,111 @@ def train_dds(config: configdict.ConfigDict):
 
                 lr = onp.asarray(exp_lr(epoch).item()).item()
                 run.log({"lr/lr": lr}, step=epoch)
-
+        end_time = time.time()
+        run.log({"training_time": start_time - end_time}, config.trainer.epochs)
         loss_list_is_eval, loss_list_eval, loss_list_pf_eval = [], [], []
-        for i in range(config.eval.seeds):
-            rng_key = next(seq)
-            subkeys = jax.random.split(rng_key, device_no)
-            _, _ = eval_report(
-                trainable_params,
-                non_trainable_params,
-                model_state,
-                subkeys,
-                batch_size_elbo,
-                jnp.array([0], dtype=jnp.int32),
-                i,
-                loss_list_eval,
-                print_flag=True,
-                wandb_run=run,
-                wandb_key="elbo_results_eval",
-            )
+        # start_time = time.time()
+        # for i in range(config.eval.seeds):
+        #     rng_key = next(seq)
+        #     subkeys = jax.random.split(rng_key, device_no)
+        #     # _, _ = eval_report(
+        #     #     trainable_params,
+        #     #     non_trainable_params,
+        #     #     model_state,
+        #     #     subkeys,
+        #     #     batch_size_elbo,
+        #     #     jnp.array([0], dtype=jnp.int32),
+        #     #     i,
+        #     #     loss_list_eval,
+        #     #     print_flag=True,
+        #     #     wandb_run=run,
+        #     #     wandb_key="elbo_results_eval",
+        #     # )
 
-            _, sampling_density_calls = eval_report(
-                trainable_params,
-                non_trainable_params,
-                model_state,
-                subkeys,
-                batch_size_elbo,
-                jnp.array([0], dtype=jnp.int32),
-                i,
-                loss_list_is_eval,
-                is_training=False,
-                wandb_run=run,
-                wandb_key="is_results_eval",
-            )
+        #     _, sampling_density_calls = eval_report(
+        #         trainable_params,
+        #         non_trainable_params,
+        #         model_state,
+        #         subkeys,
+        #         batch_size_elbo,
+        #         jnp.array([0], dtype=jnp.int32),
+        #         i,
+        #         loss_list_is_eval,
+        #         is_training=False,
+        #         wandb_run=run,
+        #         wandb_key="is_results_eval",
+        #     )
 
-            # _, _ = eval_report(
-            #     trainable_params,
-            #     non_trainable_params,
-            #     model_state,
-            #     subkeys,
-            #     batch_size_elbo,
-            #     0,
-            #     i,
-            #     loss_list_pf_eval,
-            #     is_training=False,
-            #     ode=True,
-            #     exact=False,
-            #     wandb_run=run,
-            #     wandb_key="pf_results_eval",
-            # )
+        #     # _, _ = eval_report(
+        #     #     trainable_params,
+        #     #     non_trainable_params,
+        #     #     model_state,
+        #     #     subkeys,
+        #     #     batch_size_elbo,
+        #     #     0,
+        #     #     i,
+        #     #     loss_list_pf_eval,
+        #     #     is_training=False,
+        #     #     ode=True,
+        #     #     exact=False,
+        #     #     wandb_run=run,
+        #     #     wandb_key="pf_results_eval",
+        #     # )
+        # end_time = time.time()
+        # # params = hk.data_structures.merge(trainable_params, non_trainable_params)
+        # # if config.trainer.timer:
+        # #     print(times[1:])
 
-        # params = hk.data_structures.merge(trainable_params, non_trainable_params)
-        # if config.trainer.timer:
-        #     print(times[1:])
+        # # samps = 2500
+        # # if method == "lgcp" and tfinal >= 12:
+        # #     samps = 100
 
-        # samps = 2500
-        # if method == "lgcp" and tfinal >= 12:
-        #     samps = 100
+        # # (augmented_trajectory, _), _ = forward_fn_wrap(
+        # #     params, model_state, rng_key, samps
+        # # )
 
-        # (augmented_trajectory, _), _ = forward_fn_wrap(
-        #     params, model_state, rng_key, samps
-        # )
+        # # (augmented_trajectory_det, _), _ = forward_fn_wrap(
+        # #     params, model_state, rng_key, samps, True, False
+        # # )
 
-        # (augmented_trajectory_det, _), _ = forward_fn_wrap(
-        #     params, model_state, rng_key, samps, True, False
-        # )
+        # # (augmented_trajectory_det_ext, _), _ = forward_fn_wrap(
+        # #     params, model_state, rng_key, samps, True, True
+        # # )
 
-        # (augmented_trajectory_det_ext, _), _ = forward_fn_wrap(
-        #     params, model_state, rng_key, samps, True, True
-        # )
-
-        results_dict = {
-            "elbo": loss_list,
-            "is": loss_list_is,
-            "pf": loss_list_pf,
-            "elbo_eval": loss_list_eval,
-            "is_eval": loss_list_is_eval,
-            # "pf_eval": loss_list_pf_eval,
-            # "aug": augmented_trajectory,
-            # "aug_ode": augmented_trajectory_det,
-            # "aug_ode_ext": augmented_trajectory_det_ext,
-        }
-
-        log_z_mean = onp.mean(loss_list_is_eval)
-        log_z_var = onp.var(loss_list_is_eval)
-        run.log(
-            {
-                "final_log_Z": log_z_mean,
-                "var_final_log_Z": log_z_var,
-                "sampling_density_calls": sampling_density_calls,
-                "final_elbo": onp.mean(loss_list_eval),
-            },
-            step=config.trainer.epochs,
+        onp.savetxt(
+            f"/vols/ziz/not-backed-up/anphilli/diffusion_smc/outputs/density_calls/camera_ready_density_calls/{config.task}_{config.model.reference_process_key}_{config.model.num_steps}_{config.seed}.csv",
+            log_array,
         )
 
-        if config.save_samples:
-            filename = f"/data/ziz/not-backed-up/anphilli/diffusion_smc/{config.wandb.group}/{config.task}_{config.model.reference_process_key}_{config.model.num_steps}_{config.seed}.csv"
-            onp.savetxt(filename, onp.array(loss_list_is_eval))
+        # results_dict = {
+        #     "elbo": loss_list,
+        #     "is": loss_list_is,
+        #     "pf": loss_list_pf,
+        #     "elbo_eval": loss_list_eval,
+        #     "is_eval": loss_list_is_eval,
+        #     # "pf_eval": loss_list_pf_eval,
+        #     # "aug": augmented_trajectory,
+        #     # "aug_ode": augmented_trajectory_det,
+        #     # "aug_ode_ext": augmented_trajectory_det_ext,
+        # }
+
+        # log_z_mean = onp.mean(loss_list_is_eval)
+        # log_z_var = onp.var(loss_list_is_eval)
+        # run.log(
+        #     {
+        #         "final_log_Z": log_z_mean,
+        #         "var_final_log_Z": log_z_var,
+        #         "sampling_density_calls": sampling_density_calls,
+        #         "sampling_time": (end_time - start_time) / config.eval.seeds,
+        #         "final_elbo": onp.mean(loss_list_eval),
+        #     },
+        #     step=config.trainer.epochs,
+        # )
+
+        # if config.save_samples:
+        #     filename = f"/data/ziz/not-backed-up/anphilli/diffusion_smc/{config.wandb.group}/{config.task}_{config.model.reference_process_key}_{config.model.num_steps}_{config.seed}.csv"
+        #     onp.savetxt(filename, onp.array(loss_list_is_eval))
+        results_dict = {}
 
         return params, model_state, forward_fn_wrap, rng_key, results_dict
 
