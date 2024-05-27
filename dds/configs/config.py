@@ -57,6 +57,7 @@ from dds.targets.distributions import (
     FunnelDistribution,
     NormalDistributionWrapper,
     LogGaussianCoxPines,
+    GaussianMixtureModel,
 )
 
 from dds.udp_samplers import AugmentedOUDFollmerSDEUDP
@@ -241,6 +242,91 @@ def set_task(
             is_target=True,
         )
         config.target_distribution = target_distribution
+
+    elif task == "gmm1":
+        config.model.input_dim = 1
+        target_distribution = GaussianMixtureModel(
+            seed=42,
+            dim=config.model.input_dim,
+            n_mixes=40,
+            loc_scaling=40,
+            log_var_scaling=1.0,
+            is_target=True,
+        )
+        config.target_distribution = target_distribution
+
+    elif task == "gmm2":
+        config.model.input_dim = 2
+        target_distribution = GaussianMixtureModel(
+            seed=42,
+            dim=config.model.input_dim,
+            n_mixes=40,
+            loc_scaling=40,
+            log_var_scaling=1.0,
+            is_target=True,
+        )
+        config.target_distribution = target_distribution
+
+    elif task == "gmm5":
+        config.model.input_dim = 5
+        target_distribution = GaussianMixtureModel(
+            seed=42,
+            dim=config.model.input_dim,
+            n_mixes=40,
+            loc_scaling=40,
+            log_var_scaling=1.0,
+            is_target=True,
+        )
+        config.target_distribution = target_distribution
+
+    elif task == "gmm10":
+        config.model.input_dim = 10
+        target_distribution = GaussianMixtureModel(
+            seed=42,
+            dim=config.model.input_dim,
+            n_mixes=40,
+            loc_scaling=40,
+            log_var_scaling=1.0,
+            is_target=True,
+        )
+        config.target_distribution = target_distribution
+
+    elif task == "gmm20":
+        config.model.input_dim = 20
+        target_distribution = GaussianMixtureModel(
+            seed=42,
+            dim=config.model.input_dim,
+            n_mixes=40,
+            loc_scaling=40,
+            log_var_scaling=1.0,
+            is_target=True,
+        )
+        config.target_distribution = target_distribution
+
+    elif task == "gmm50":
+        config.model.input_dim = 50
+        target_distribution = GaussianMixtureModel(
+            seed=42,
+            dim=config.model.input_dim,
+            n_mixes=40,
+            loc_scaling=40,
+            log_var_scaling=1.0,
+            is_target=True,
+        )
+        config.target_distribution = target_distribution
+
+    elif task == "gmm100":
+        config.model.input_dim = 100
+        target_distribution = GaussianMixtureModel(
+            seed=42,
+            dim=config.model.input_dim,
+            n_mixes=40,
+            loc_scaling=40,
+            log_var_scaling=1.0,
+            is_target=True,
+        )
+        config.target_distribution = target_distribution
+
     else:
         raise BaseException("Task config not implemented")
 

@@ -7,6 +7,7 @@ import time
 import timeit
 from typing import Any, List, Tuple, Optional
 from absl import app, flags
+import os
 
 from absl import logging
 import haiku as hk
@@ -37,6 +38,20 @@ from dds.vi import get_variational_approx
 import warnings
 
 warnings.filterwarnings("ignore")
+
+import ot
+
+
+def W2_distance(x, y, reg=0.01):
+    N = x.shape[0]
+    x, y = jnp.array(x), jnp.array(y)
+    a, b = jnp.ones(N) / N, jnp.ones(N) / N
+
+    M = ot.dist(x, y)
+    M /= M.max()
+
+    T_reg = ot.sinkhorn2(a, b, M, reg, log=False, numItermax=10000, stopThr=1e-16)
+    return T_reg
 
 
 FLAGS = flags.FLAGS
@@ -95,6 +110,12 @@ def train_dds(config: configdict.ConfigDict):
     Returns:
       Tuple containing params, state, function that runs learned sde, and losses
     """
+    if config.save_samples:
+        folders = ["logZ", "samples", "density_calls"]
+        for f in folders:
+            save_path = f"/data/ziz/not-backed-up/anphilli/diffusion_smc/outputs/{f}/{config.wandb.group}"
+            if not os.path.exists(save_path):
+                os.makedirs(save_path)
     wandb_kwargs = {
         "project": config.wandb.project,
         "entity": config.wandb.entity,
@@ -107,20 +128,40 @@ def train_dds(config: configdict.ConfigDict):
     with wandb.init(**wandb_kwargs) as run:
         key = jax.random.PRNGKey(config.seed)
         if config.use_vi_approx:
-            logging.info("Learning VI approximation")
-            key, key_ = jax.random.split(key)
-            vi_params = get_variational_approx(
-                dim=config.model.input_dim,
-                lr_schedule=config.vi_approx.schedule,
-                batch_size=config.vi_approx.batch_size,
-                iters=config.vi_approx.iters,
-                rng=key_,
-                target_distribution=config.target_distribution,
-            )
+            try:
+                mean = onp.loadtxt(
+                    f"/vols/ziz/not-backed-up/anphilli/diffusion_smc/data/vi_params/{config.task}_mean.csv"
+                )
+                scale = onp.loadtxt(
+                    f"/vols/ziz/not-backed-up/anphilli/diffusion_smc/data/vi_params/{config.task}_scale.csv"
+                )
+                logging.info("Loaded VI approximation")
+            except:
+                logging.info("Learning VI approximation")
+                key, key_ = jax.random.split(key)
+                vi_params = get_variational_approx(
+                    dim=config.model.input_dim,
+                    lr_schedule=config.vi_approx.schedule,
+                    batch_size=config.vi_approx.batch_size,
+                    iters=config.vi_approx.iters,
+                    rng=key_,
+                    target_distribution=config.target_distribution,
+                )
+                mean = vi_params["Variational"]["means"]
+                scale = vi_params["Variational"]["scales"]
+                onp.savetxt(
+                    f"/vols/ziz/not-backed-up/anphilli/diffusion_smc/data/vi_params/{config.task}_mean.csv",
+                    mean,
+                )
+                onp.savetxt(
+                    f"/vols/ziz/not-backed-up/anphilli/diffusion_smc/data/vi_params/{config.task}_scale.csv",
+                    scale,
+                )
+                logging.info("VI params saved")
             target_distribution = WhitenedDistributionWrapper(
-                config.target_distribution,
-                vi_params["Variational"]["means"],
-                vi_params["Variational"]["scales"],
+                target_distribution,
+                mean,
+                scale,
             )
         else:
             target_distribution = config.target_distribution
@@ -317,21 +358,21 @@ def train_dds(config: configdict.ConfigDict):
             exact=False,
             dt_=dt,
         ):
-            samps, _, density_state = forward_fn.apply(
+            (augmented_trajectory, ts, density_state), model_state = forward_fn.apply(
                 params,
                 model_state,
                 subkeys,
                 int(batch_size / device_no),
                 density_state=density_state,
-                is_training=False,
+                training=False,
                 ode=ode,
                 exact=exact,
                 dt_=dt_,
             )
-            samps = jax.device_get(samps)
+            augmented_trajectory = jax.device_get(augmented_trajectory)
+            ts = jax.device_get(ts)
             density_state = jax.device_get(density_state)
 
-            augmented_trajectory, ts = samps
             return (augmented_trajectory, ts), _, density_state
 
         def forward_fn_wrap(
@@ -541,9 +582,9 @@ def train_dds(config: configdict.ConfigDict):
         loss_list = []
         loss_list_is = []
         loss_list_pf = []
-        log_array = onp.zeros(
-            (config.trainer.epochs // config.trainer.log_every_n_epochs, 4)
-        )
+        # log_array = onp.zeros(
+        #     (config.trainer.epochs // config.trainer.log_every_n_epochs, 4)
+        # )
 
         start = 0
         density_state_training = jnp.array([0], dtype=jnp.int32)
@@ -587,15 +628,15 @@ def train_dds(config: configdict.ConfigDict):
             )
 
             if epoch % config.trainer.log_every_n_epochs == 0:
-                log_Z = logZ_eval_jit(
-                    [trainable_params, non_trainable_params], model_state, key
-                )
-                log_array[(epoch // config.trainer.log_every_n_epochs) - 1, :] = (
-                    epoch,
-                    density_state_training,
-                    log_Z.mean(),
-                    log_Z.var(),
-                )
+                # log_Z = logZ_eval_jit(
+                #     [trainable_params, non_trainable_params], model_state, key
+                # )
+                # log_array[(epoch // config.trainer.log_every_n_epochs) - 1, :] = (
+                #     epoch,
+                #     density_state_training,
+                #     log_Z.mean(),
+                #     log_Z.var(),
+                # )
 
                 _, _ = eval_report(
                     trainable_params,
@@ -646,107 +687,126 @@ def train_dds(config: configdict.ConfigDict):
         end_time = time.time()
         run.log({"training_time": start_time - end_time}, config.trainer.epochs)
         loss_list_is_eval, loss_list_eval, loss_list_pf_eval = [], [], []
-        # start_time = time.time()
-        # for i in range(config.eval.seeds):
-        #     rng_key = next(seq)
-        #     subkeys = jax.random.split(rng_key, device_no)
-        #     # _, _ = eval_report(
-        #     #     trainable_params,
-        #     #     non_trainable_params,
-        #     #     model_state,
-        #     #     subkeys,
-        #     #     batch_size_elbo,
-        #     #     jnp.array([0], dtype=jnp.int32),
-        #     #     i,
-        #     #     loss_list_eval,
-        #     #     print_flag=True,
-        #     #     wandb_run=run,
-        #     #     wandb_key="elbo_results_eval",
-        #     # )
+        start_time = time.time()
+        for i in range(config.eval.seeds):
+            rng_key = next(seq)
+            subkeys = jax.random.split(rng_key, device_no)
+            _, _ = eval_report(
+                trainable_params,
+                non_trainable_params,
+                model_state,
+                subkeys,
+                batch_size_elbo,
+                jnp.array([0], dtype=jnp.int32),
+                i,
+                loss_list_eval,
+                print_flag=True,
+                wandb_run=run,
+                wandb_key="elbo_results_eval",
+            )
 
-        #     _, sampling_density_calls = eval_report(
-        #         trainable_params,
-        #         non_trainable_params,
-        #         model_state,
-        #         subkeys,
-        #         batch_size_elbo,
-        #         jnp.array([0], dtype=jnp.int32),
-        #         i,
-        #         loss_list_is_eval,
-        #         is_training=False,
-        #         wandb_run=run,
-        #         wandb_key="is_results_eval",
-        #     )
+            _, sampling_density_calls = eval_report(
+                trainable_params,
+                non_trainable_params,
+                model_state,
+                subkeys,
+                batch_size_elbo,
+                jnp.array([0], dtype=jnp.int32),
+                i,
+                loss_list_is_eval,
+                is_training=False,
+                wandb_run=run,
+                wandb_key="is_results_eval",
+            )
 
-        #     # _, _ = eval_report(
-        #     #     trainable_params,
-        #     #     non_trainable_params,
-        #     #     model_state,
-        #     #     subkeys,
-        #     #     batch_size_elbo,
-        #     #     0,
-        #     #     i,
-        #     #     loss_list_pf_eval,
-        #     #     is_training=False,
-        #     #     ode=True,
-        #     #     exact=False,
-        #     #     wandb_run=run,
-        #     #     wandb_key="pf_results_eval",
-        #     # )
-        # end_time = time.time()
-        # # params = hk.data_structures.merge(trainable_params, non_trainable_params)
-        # # if config.trainer.timer:
-        # #     print(times[1:])
+            # _, _ = eval_report(
+            #     trainable_params,
+            #     non_trainable_params,
+            #     model_state,
+            #     subkeys,
+            #     batch_size_elbo,
+            #     0,
+            #     i,
+            #     loss_list_pf_eval,
+            #     is_training=False,
+            #     ode=True,
+            #     exact=False,
+            #     wandb_run=run,
+            #     wandb_key="pf_results_eval",
+            # )
+        end_time = time.time()
+        # params = hk.data_structures.merge(trainable_params, non_trainable_params)
+        # if config.trainer.timer:
+        #     print(times[1:])
 
-        # # samps = 2500
-        # # if method == "lgcp" and tfinal >= 12:
-        # #     samps = 100
+        samps = 2000
+        if method == "lgcp" and tfinal >= 12:
+            samps = 100
 
-        # # (augmented_trajectory, _), _ = forward_fn_wrap(
-        # #     params, model_state, rng_key, samps
-        # # )
-
-        # # (augmented_trajectory_det, _), _ = forward_fn_wrap(
-        # #     params, model_state, rng_key, samps, True, False
-        # # )
-
-        # # (augmented_trajectory_det_ext, _), _ = forward_fn_wrap(
-        # #     params, model_state, rng_key, samps, True, True
-        # # )
-
-        onp.savetxt(
-            f"/vols/ziz/not-backed-up/anphilli/diffusion_smc/outputs/density_calls/camera_ready_density_calls/{config.task}_{config.model.reference_process_key}_{config.model.num_steps}_{config.seed}.csv",
-            log_array,
+        (augmented_trajectory, _), _, _ = forward_fn_wrap(
+            params,
+            model_state,
+            rng_key,
+            samps,
+            jnp.array([0], dtype=jnp.int32),
         )
+        final_samples = augmented_trajectory[:, -1, : config.model.input_dim]
+        if "gmm" in config.task:
+            rng_ = next(seq)
+            target_samples = target_distribution.sample(rng_, samps)
+            w2dist = W2_distance(target_samples, final_samples)
+            run.log({"W2_distance": w2dist}, 0)
+            if config.save_samples:
+                onp.savetxt(
+                    f"/data/ziz/not-backed-up/anphilli/diffusion_smc/outputs/w2dist/{config.wandb.group}/{config.task}_{config.model.reference_process_key}_{config.model.num_steps}_{config.seed}.csv",
+                    onp.array([w2dist]),
+                )
+                onp.savetxt(
+                    f"/data/ziz/not-backed-up/anphilli/diffusion_smc/outputs/samples/{config.wandb.group}/{config.task}_{config.model.reference_process_key}_{config.model.num_steps}_{config.seed}.csv",
+                    final_samples,
+                )
 
-        # results_dict = {
-        #     "elbo": loss_list,
-        #     "is": loss_list_is,
-        #     "pf": loss_list_pf,
-        #     "elbo_eval": loss_list_eval,
-        #     "is_eval": loss_list_is_eval,
-        #     # "pf_eval": loss_list_pf_eval,
-        #     # "aug": augmented_trajectory,
-        #     # "aug_ode": augmented_trajectory_det,
-        #     # "aug_ode_ext": augmented_trajectory_det_ext,
-        # }
-
-        # log_z_mean = onp.mean(loss_list_is_eval)
-        # log_z_var = onp.var(loss_list_is_eval)
-        # run.log(
-        #     {
-        #         "final_log_Z": log_z_mean,
-        #         "var_final_log_Z": log_z_var,
-        #         "sampling_density_calls": sampling_density_calls,
-        #         "sampling_time": (end_time - start_time) / config.eval.seeds,
-        #         "final_elbo": onp.mean(loss_list_eval),
-        #     },
-        #     step=config.trainer.epochs,
+        # (augmented_trajectory_det, _), _ = forward_fn_wrap(
+        #     params, model_state, rng_key, samps, True, False
         # )
 
+        # (augmented_trajectory_det_ext, _), _ = forward_fn_wrap(
+        #     params, model_state, rng_key, samps, True, True
+        # )
         # if config.save_samples:
-        #     filename = f"/data/ziz/not-backed-up/anphilli/diffusion_smc/{config.wandb.group}/{config.task}_{config.model.reference_process_key}_{config.model.num_steps}_{config.seed}.csv"
-        #     onp.savetxt(filename, onp.array(loss_list_is_eval))
+        #     onp.savetxt(
+        #         f"/vols/ziz/not-backed-up/anphilli/diffusion_smc/outputs/density_calls/{config.wandb.group}/{config.task}_{config.model.reference_process_key}_{config.model.num_steps}_{config.seed}.csv",
+        #         log_array,
+        #     )
+
+        results_dict = {
+            "elbo": loss_list,
+            "is": loss_list_is,
+            "pf": loss_list_pf,
+            "elbo_eval": loss_list_eval,
+            "is_eval": loss_list_is_eval,
+            # "pf_eval": loss_list_pf_eval,
+            # "aug": augmented_trajectory,
+            # "aug_ode": augmented_trajectory_det,
+            # "aug_ode_ext": augmented_trajectory_det_ext,
+        }
+
+        log_z_mean = onp.mean(loss_list_is_eval)
+        log_z_var = onp.var(loss_list_is_eval)
+        run.log(
+            {
+                "final_log_Z": log_z_mean,
+                "var_final_log_Z": log_z_var,
+                "sampling_density_calls": sampling_density_calls,
+                "sampling_time": (end_time - start_time) / config.eval.seeds,
+                "final_elbo": onp.mean(loss_list_eval),
+            },
+            step=config.trainer.epochs,
+        )
+
+        if config.save_samples:
+            filename = f"/data/ziz/not-backed-up/anphilli/diffusion_smc/outputs/logZ/{config.wandb.group}/{config.task}_{config.model.reference_process_key}_{config.model.num_steps}_{config.seed}.csv"
+            onp.savetxt(filename, onp.array(loss_list_is_eval))
         results_dict = {}
 
         return params, model_state, forward_fn_wrap, rng_key, results_dict

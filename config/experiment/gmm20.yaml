@@ -1,0 +1,9 @@
+# @package _global_
+
+task: 'gmm20'
+
+use_vi_approx: False
+
+lr: 1e-3
+exp_decay: 0.95
+base_steps: 8

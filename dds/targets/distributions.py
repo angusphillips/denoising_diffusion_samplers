@@ -660,3 +660,60 @@ class BrownianMissingMiddleScales(Distribution):
         else:
             density_state += self.is_target * x.shape[0]
             return jax.vmap(unbatched)(x), density_state
+
+
+class GaussianMixtureModel(Distribution):
+    def __init__(
+        self,
+        seed: int,
+        dim: int,
+        n_mixes: int,
+        loc_scaling: float,
+        log_var_scaling: float = 0.1,
+        is_target: bool = False,
+    ):
+        super().__init__(dim, is_target)
+        self.n_mixes = n_mixes
+        key = jax.random.PRNGKey(seed)
+        key, subkey1, subkey2 = jax.random.split(key, 3)
+        self._means = (
+            (jax.random.uniform(key=subkey1, shape=(n_mixes, dim)) - 0.5)
+            * 2
+            * loc_scaling
+        )
+        self._scales = jax.nn.softplus(jnp.ones((n_mixes, dim)) * log_var_scaling)
+        _weights = jax.random.uniform(subkey2, (n_mixes,))
+        self._weights = _weights / jnp.sum(_weights)
+
+    @check_shapes("return: [b, d]")
+    def sample(self, key: Key, num_samples: int) -> Array:
+        batched_sample_shape = (num_samples,) + (self.dim,)
+        subkey1, subkey2 = jax.random.split(key)
+        components = jax.random.choice(
+            subkey1, a=int(self.n_mixes), shape=(num_samples,), p=self._weights
+        )
+        mean = self._means[components]  # (n_samples, dim)
+        scale = self._scales[components]  # (n_samples, dim)
+        cov = jax.vmap(lambda s: jnp.diag(s**2))(scale)
+        samples = jax.random.multivariate_normal(
+            key=subkey2, mean=mean, cov=cov, shape=(num_samples,)
+        )
+        assert_shape(samples, batched_sample_shape)
+        return samples
+
+    @check_shapes("x: [b, d]", "return[0]: [b]")
+    def evaluate_log_density(
+        self, x: Array, density_state: int
+    ) -> tp.Tuple[Array, int]:
+        logpdfs = jnp.zeros((self.n_mixes))
+        logpdfs = jax.vmap(
+            lambda component: jnp.log(self._weights[component])
+            + jax.scipy.stats.multivariate_normal.logpdf(
+                x,
+                mean=self._means[component],
+                cov=jnp.diag(self._scales[component] ** 2),
+            )
+        )(jnp.arange(self.n_mixes))
+        out = jax.scipy.special.logsumexp(logpdfs, axis=0)
+        density_state += self.is_target * x.shape[0]
+        return out, density_state
